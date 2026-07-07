@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AttendX — Smart Face-Recognition Attendance</title>
+  <meta name="description" content="AttendX: smart face-recognition attendance for the EEE department. Download the Android app." />
+  <link rel="icon" type="image/png" href="attendx_logo.png" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
+      background: #F5F7FB;
+      color: #111827;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .hero {
+      background: linear-gradient(135deg, #2563EB 0%, #14C4B8 100%);
+      color: #fff;
+      padding: 64px 24px 96px;
+      text-align: center;
+      border-radius: 0 0 42px 42px;
+    }
+    .logo {
+      width: 128px; height: 128px;
+      background: #fff;
+      border-radius: 50%;
+      padding: 14px;
+      box-shadow: 0 12px 40px rgba(0,0,0,.22);
+      margin-bottom: 20px;
+    }
+    h1 { font-size: 2.6rem; font-weight: 800; letter-spacing: .5px; }
+    .tagline { margin-top: 10px; font-size: 1.05rem; opacity: .92; }
+    .dept { margin-top: 6px; font-size: .85rem; opacity: .75; letter-spacing: 1px; text-transform: uppercase; }
+
+    .download-wrap { margin-top: -44px; text-align: center; padding: 0 24px; }
+    .download-btn {
+      display: inline-flex; align-items: center; gap: 12px;
+      background: #fff; color: #2563EB;
+      font-size: 1.15rem; font-weight: 800;
+      padding: 18px 40px; border-radius: 100px;
+      text-decoration: none;
+      box-shadow: 0 14px 40px rgba(37,99,235,.35);
+      transition: transform .15s ease, box-shadow .15s ease;
+    }
+    .download-btn:hover { transform: translateY(-3px); box-shadow: 0 18px 48px rgba(37,99,235,.45); }
+    .download-btn svg { width: 26px; height: 26px; }
+    .version { margin-top: 12px; font-size: .8rem; color: #6B7280; }
+
+    .features {
+      max-width: 900px; margin: 48px auto; padding: 0 24px;
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px;
+    }
+    .card {
+      background: #fff; border-radius: 20px; padding: 22px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.05);
+    }
+    .card .icon {
+      width: 44px; height: 44px; border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px; margin-bottom: 12px;
+      background: linear-gradient(135deg, rgba(37,99,235,.12), rgba(20,196,184,.12));
+    }
+    .card h3 { font-size: 1rem; margin-bottom: 6px; }
+    .card p { font-size: .85rem; color: #6B7280; line-height: 1.5; }
+
+    .install {
+      max-width: 640px; margin: 8px auto 48px; padding: 22px 24px;
+      background: #fff; border-radius: 20px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.05);
+    }
+    .install h3 { font-size: 1rem; margin-bottom: 10px; }
+    .install ol { padding-left: 20px; font-size: .88rem; color: #374151; line-height: 1.9; }
+
+    footer {
+      text-align: center; padding: 24px; font-size: .78rem; color: #9CA3AF;
+      margin-top: auto;
+    }
+  </style>
+</head>
+<body>
+
+  <section class="hero">
+    <img class="logo" src="attendx_logo.png" alt="AttendX logo" />
+    <h1>AttendX</h1>
+    <p class="tagline">Walk in. Get recognized. You're marked present.</p>
+    <p class="dept">Department of Electrical Engineering</p>
+  </section>
+
+  <div class="download-wrap">
+    <a class="download-btn" href="attendx.apk" download>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      Download for Android
+    </a>
+    <p class="version" id="version">APK • free download</p>
+  </div>
+
+  <section class="features">
+    <div class="card">
+      <div class="icon">👤</div>
+      <h3>Face Check-in</h3>
+      <p>Attendance is marked automatically by the smart camera at the entrance — no registers, no proxies.</p>
+    </div>
+    <div class="card">
+      <div class="icon">📅</div>
+      <h3>Live Timetable</h3>
+      <p>Today's and tomorrow's classes with instant updates when a class is cancelled, replaced, or moved.</p>
+    </div>
+    <div class="card">
+      <div class="icon">🔔</div>
+      <h3>Daily Digest</h3>
+      <p>A morning notification with your full day of classes and labs — plan your day before you leave home.</p>
+    </div>
+    <div class="card">
+      <div class="icon">📊</div>
+      <h3>Attendance Analytics</h3>
+      <p>Monthly calendars, subject-wise percentages, and 75% eligibility tracking, all in one place.</p>
+    </div>
+  </section>
+
+  <section class="install">
+    <h3>📲 How to install</h3>
+    <ol>
+      <li>Tap <strong>Download for Android</strong> above.</li>
+      <li>Open the downloaded <strong>attendx.apk</strong> file.</li>
+      <li>If prompted, allow <strong>Install from unknown sources</strong> for your browser.</li>
+      <li>Open AttendX, register with your student details, and enroll your face.</li>
+    </ol>
+  </section>
+
+  <footer>
+    AttendX · Department of Electrical Engineering<br/>
+    Already installed? The app checks for updates automatically at login.
+  </footer>
+
+</body>
+</html>
