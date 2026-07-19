@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/foundation.dart';
@@ -30,6 +31,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
   final FirestoreService firestoreService = FirestoreService();
 
   CameraController? _cameraController;
+  Timer? _cameraWatchdog;
   bool _isCameraInitialized = false;
   bool _isProcessingFrame = false;
   bool _isVerifying = false;
@@ -109,9 +111,20 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
         _candidateProfiles = [FaceCandidate.fromDoc(user.uid, data)];
       }
 
+      // Watchdog: if the camera hasn't come up within 5 seconds, stop the
+      // endless spinner and fall back to credential login.
+      _cameraWatchdog = Timer(const Duration(seconds: 5), () {
+        if (mounted && !_isCameraInitialized) {
+          _failAndExit(
+              "Camera didn't start. Please try again or login with your credentials.");
+        }
+      });
+
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
+        _cameraWatchdog?.cancel();
         _updateStatus("No camera sensors found.");
+        _exitNoEnrollmentData();
         return;
       }
 
@@ -130,6 +143,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
       );
 
       await _cameraController!.initialize();
+      _cameraWatchdog?.cancel();
 
       if (!mounted) return;
       setState(() {
@@ -146,9 +160,37 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
       });
 
       _startFrameSubscription();
+    } on CameraException catch (e) {
+      _cameraWatchdog?.cancel();
+      // The camera plugin asks for permission automatically on first use;
+      // landing here means it was denied or the camera is unavailable.
+      if (e.code.toLowerCase().contains('accessdenied')) {
+        _failAndExit(
+            "Camera permission denied. Allow Camera for AttendX in phone Settings, then try again.");
+      } else {
+        _failAndExit(
+            "Camera is busy or unavailable — close any app using the camera and try again.");
+      }
     } catch (e) {
-      _updateStatus("Initialization failure.");
+      _cameraWatchdog?.cancel();
+      debugPrint("Face verification init error: $e");
+      _failAndExit("Camera failed to start. Please try again.");
     }
+  }
+
+  /// One clear message, then straight back to credential login — never a
+  /// dead screen, never an endless retry.
+  void _failAndExit(String message) {
+    if (!mounted) return;
+    _updateStatus(message);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
+    Future.delayed(const Duration(milliseconds: 1400), () {
+      if (mounted) {
+        Navigator.pop(context, widget.verifyAcrossUsers ? null : false);
+      }
+    });
   }
 
   void _startFrameSubscription() {
@@ -495,6 +537,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
 
   @override
   void dispose() {
+    _cameraWatchdog?.cancel();
     _cameraController?.dispose();
     super.dispose();
   }

@@ -1,13 +1,14 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'role_router.dart';
-import 'face_verification_screen.dart';
 import 'register_screen.dart';
 import '../admin/master_data/master_home.dart';
 import '../core/constants/app_config.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_radius.dart';
 import '../services/auth_service.dart';
+import '../services/biometric_auth_service.dart';
 import '../services/update_service.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -27,6 +28,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _obscureSecretKey = true;
+  bool _biometricAvailable = false;
 
   @override
   void initState() {
@@ -35,6 +37,71 @@ class _LoginScreenState extends State<LoginScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) UpdateService.instance.checkForUpdate(context);
     });
+    _checkBiometric();
+  }
+
+  Future<void> _checkBiometric() async {
+    if (kIsWeb) return;
+    final enabled = await BiometricAuthService.instance.isEnabled();
+    final supported =
+        enabled && await BiometricAuthService.instance.isDeviceSupported();
+    if (!mounted) return;
+    setState(() => _biometricAvailable = enabled && supported);
+
+    // PhonePe-style: fingerprint prompt appears by itself when enabled —
+    // no tap needed. Cancelling falls back to the normal login form.
+    if (_biometricAvailable && !_isLoading) {
+      await Future.delayed(const Duration(milliseconds: 450));
+      if (mounted && !_isLoading) _handleBiometricLogin();
+    }
+  }
+
+  /// Fingerprint releases the securely-stored credentials, then a normal
+  /// Firebase sign-in runs with them.
+  Future<void> _handleBiometricLogin() async {
+    final creds = await BiometricAuthService.instance.authenticate();
+    if (creds == null) {
+      final err = BiometricAuthService.instance.lastError;
+      if (err != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Fingerprint error: $err'),
+            backgroundColor: AppColors.danger,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
+      return; // cancelled (no error) or failed (shown above)
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      final result = await authService.loginUser(
+        email: creds.$1,
+        password: creds.$2,
+      );
+      if (!mounted) return;
+
+      if (result == null) {
+        _goHome();
+      } else {
+        // Stored password no longer valid (changed elsewhere) — clean up.
+        await BiometricAuthService.instance.disable();
+        if (!mounted) return;
+        setState(() => _biometricAvailable = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                'Fingerprint login expired (password changed). Login with your credentials and enable it again in Account Settings.'),
+            backgroundColor: AppColors.warning,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -69,6 +136,9 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
 
       if (result == null) {
+        // Tell Android the login succeeded so Google Password Manager
+        // offers to save (and later autofill) these credentials.
+        TextInput.finishAutofillContext();
         _goHome();
       } else {
         // Wrong credentials — offer the reset-link flow right away.
@@ -373,48 +443,6 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  /// Face alone is enough — no credentials needed if the face matches.
-  Future<void> _handleFaceVerifyAndLogin() async {
-    setState(() => _isLoading = true);
-
-    try {
-      final matchedUid = await Navigator.push<String?>(
-        context,
-        MaterialPageRoute(
-          builder: (context) =>
-              const FaceVerificationScreen(verifyAcrossUsers: true),
-        ),
-      );
-
-      if (!mounted) return;
-
-      if (matchedUid != null && matchedUid.isNotEmpty) {
-        _goHome(overrideUid: matchedUid);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-                'No enrolled face matched. Please sign in with your credentials.'),
-            backgroundColor: AppColors.warning,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('An error occurred: $e'),
-            backgroundColor: AppColors.danger,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
   InputDecoration _inputDecoration({
     required String label,
     required IconData icon,
@@ -542,7 +570,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     const SizedBox(height: 6),
                     const Text(
-                      "Sign in with your credentials or your face if already Registered",
+                      "Sign in with your credentials to continue",
                       textAlign: TextAlign.center,
                       style: TextStyle(
                           fontSize: 12.5, color: AppColors.textSecondary),
@@ -563,11 +591,14 @@ class _LoginScreenState extends State<LoginScreen> {
                             )
                           ],
                         ),
-                        child: Column(
+                        child: AutofillGroup(
+                          child: Column(
                           children: [
                             TextFormField(
                               controller: emailController,
                               keyboardType: TextInputType.emailAddress,
+                              autofillHints: const [AutofillHints.username,
+                                  AutofillHints.email],
                               decoration: _inputDecoration(
                                 label: "Email Address",
                                 icon: Icons.mail_outline_rounded,
@@ -586,6 +617,9 @@ class _LoginScreenState extends State<LoginScreen> {
                             TextFormField(
                               controller: passwordController,
                               obscureText: _obscurePassword,
+                              autofillHints: const [AutofillHints.password],
+                              onEditingComplete: () =>
+                                  TextInput.finishAutofillContext(),
                               decoration: _inputDecoration(
                                 label: "Password",
                                 icon: Icons.lock_outline_rounded,
@@ -659,60 +693,56 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                           ],
                         ),
+                        ),
                       ),
                       const SizedBox(height: 24),
 
-                      // Face login is device-only (camera + on-device
-                      // model) — hidden on the web app.
+                      // Fingerprint login (only when enabled on a capable
+                      // device) — hidden on the web app.
                       if (!kIsWeb) ...[
-                        // ----------------------------------------- divider
-                        const Row(
-                          children: [
-                            Expanded(child: Divider(color: AppColors.divider)),
-                            Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 12),
-                              child: Text("OR",
+                        if (_biometricAvailable) ...[
+                          // --------------------------------------- divider
+                          const Row(
+                            children: [
+                              Expanded(
+                                  child: Divider(color: AppColors.divider)),
+                              Padding(
+                                padding:
+                                    EdgeInsets.symmetric(horizontal: 12),
+                                child: Text("OR",
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppColors.textSecondary)),
+                              ),
+                              Expanded(
+                                  child: Divider(color: AppColors.divider)),
+                            ],
+                          ),
+                          const SizedBox(height: 24),
+                          SizedBox(
+                            height: 52,
+                            child: OutlinedButton.icon(
+                              onPressed:
+                                  _isLoading ? null : _handleBiometricLogin,
+                              icon: const Icon(Icons.fingerprint_rounded),
+                              label: const Text("Login with Fingerprint",
                                   style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
-                                      color: AppColors.textSecondary)),
-                            ),
-                            Expanded(child: Divider(color: AppColors.divider)),
-                          ],
-                        ),
-                        const SizedBox(height: 24),
-
-                        // -------------------------------------- face login
-                        SizedBox(
-                          height: 52,
-                          child: OutlinedButton.icon(
-                            onPressed:
-                                _isLoading ? null : _handleFaceVerifyAndLogin,
-                            icon: const Icon(
-                                Icons.face_retouching_natural_rounded),
-                            label: const Text("Login with Face",
-                                style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600)),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: AppColors.primary,
-                              backgroundColor: AppColors.surface,
-                              side: const BorderSide(
-                                  color: AppColors.primary, width: 1.2),
-                              shape: RoundedRectangleBorder(
-                                borderRadius:
-                                    BorderRadius.circular(AppRadius.sm),
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600)),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: AppColors.primary,
+                                backgroundColor: AppColors.surface,
+                                side: const BorderSide(
+                                    color: AppColors.primary, width: 1.2),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius:
+                                      BorderRadius.circular(AppRadius.sm),
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                        const SizedBox(height: 10),
-                        const Text(
-                          "Face login works only after you enroll your face from the dashboard.",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                              fontSize: 11.5, color: AppColors.textSecondary),
-                        ),
+                        ],
                       ],
                       const SizedBox(height: 28),
 

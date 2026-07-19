@@ -1,10 +1,12 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_radius.dart';
 import '../services/auth_service.dart';
+import '../services/biometric_auth_service.dart';
 
 /// Account Settings: edit personal details and change the password.
 /// Every save is protected by password re-authentication, so only the
@@ -28,10 +30,13 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
   late int _year;
 
   bool _saving = false;
+  bool _bioSupported = false;
+  bool _bioEnabled = false;
 
   @override
   void initState() {
     super.initState();
+    _loadBiometricState();
     _nameController =
         TextEditingController(text: widget.student['name']?.toString() ?? '');
     _phoneController =
@@ -60,8 +65,57 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
         ),
       );
 
-  /// Asks the user to confirm their password. Returns true if verified.
-  Future<bool> _confirmPassword(String reason) async {
+  Future<void> _loadBiometricState() async {
+    if (kIsWeb) return;
+    final supported = await BiometricAuthService.instance.isDeviceSupported();
+    final enabled = await BiometricAuthService.instance.isEnabled();
+    if (mounted) {
+      setState(() {
+        _bioSupported = supported;
+        _bioEnabled = enabled;
+      });
+    }
+  }
+
+  Future<void> _toggleBiometric(bool turnOn) async {
+    if (!turnOn) {
+      await BiometricAuthService.instance.disable();
+      if (mounted) {
+        setState(() => _bioEnabled = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Fingerprint login disabled.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
+    final password = await _verifiedPassword(
+        'Confirm your password to enable fingerprint login on this device.');
+    if (password == null) return;
+
+    final email = FirebaseAuth.instance.currentUser?.email;
+    if (email == null) return;
+
+    await BiometricAuthService.instance
+        .enable(email: email, password: password);
+    if (mounted) {
+      setState(() => _bioEnabled = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Fingerprint login enabled for this device.'),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  /// Asks for the password, verifies it with Firebase, and returns it
+  /// (null if cancelled or wrong).
+  Future<String?> _verifiedPassword(String reason) async {
     final passController = TextEditingController();
     bool obscure = true;
 
@@ -128,21 +182,27 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
       ),
     );
 
-    if (password == null || password.isEmpty) return false;
+    if (password == null || password.isEmpty) return null;
 
     final error = await _authService.reauthenticate(password: password);
-    if (error != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(error),
-          backgroundColor: AppColors.danger,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return false;
+    if (error != null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error),
+            backgroundColor: AppColors.danger,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return null;
     }
-    return error == null;
+    return password;
   }
+
+  /// Asks the user to confirm their password. Returns true if verified.
+  Future<bool> _confirmPassword(String reason) async =>
+      (await _verifiedPassword(reason)) != null;
 
   Future<void> _saveDetails() async {
     if (!_formKey.currentState!.validate()) return;
@@ -154,12 +214,20 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
     setState(() => _saving = true);
     try {
       final uid = FirebaseAuth.instance.currentUser!.uid;
-      await FirebaseFirestore.instance.collection('students').doc(uid).set({
+      final updated = {
         'name': _nameController.text.trim(),
         'phone': _phoneController.text.trim(),
         'section': _sectionController.text.trim().toUpperCase(),
         'year': _year,
-      }, SetOptions(merge: true));
+      };
+      await FirebaseFirestore.instance
+          .collection('students')
+          .doc(uid)
+          .set(updated, SetOptions(merge: true));
+
+      // The dashboard/More screen hold this same map in memory — update it
+      // in place so the new values show immediately (not after re-login).
+      widget.student.addAll(updated);
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -426,6 +494,26 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                   onTap: _changePassword,
                 ),
               ),
+              if (_bioSupported) ...[
+                const SizedBox(height: 18),
+                Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(AppRadius.lg),
+                  ),
+                  child: SwitchListTile(
+                    secondary: const Icon(Icons.fingerprint_rounded,
+                        color: AppColors.primary),
+                    title: const Text('Fingerprint Login',
+                        style: TextStyle(fontWeight: FontWeight.w700)),
+                    subtitle: const Text(
+                        'Login with your fingerprint on this device',
+                        style: TextStyle(fontSize: 12)),
+                    value: _bioEnabled,
+                    onChanged: _toggleBiometric,
+                  ),
+                ),
+              ],
               const SizedBox(height: 10),
               const Text(
                 'Registration number and email cannot be changed. Contact the administration office for those.',
