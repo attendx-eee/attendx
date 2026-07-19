@@ -29,6 +29,7 @@ import '../../admin/services/timetable_service.dart';
 import '../../admin/models/period_model.dart';
 import '../../core/constants/app_config.dart';
 import '../../more/account_settings_screen.dart';
+import '../../services/update_service.dart';
 import '../../cr/cr_timetable_screen.dart';
 import '../../timetable/models/timetable_override_model.dart';
 import '../../timetable/services/timetable_override_service.dart';
@@ -83,6 +84,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     loadStudent();
+    // Prompt to update once the user is on the dashboard.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) UpdateService.instance.checkForUpdate(context);
+    });
   }
 
   @override

@@ -9,7 +9,6 @@ import '../core/theme/app_colors.dart';
 import '../core/theme/app_radius.dart';
 import '../services/auth_service.dart';
 import '../services/biometric_auth_service.dart';
-import '../services/update_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -33,10 +32,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
-    // Prompt to update before anyone signs in, if a newer APK exists.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) UpdateService.instance.checkForUpdate(context);
-    });
+    // Update prompt now lives on the dashboard (after login).
     _checkBiometric();
   }
 
