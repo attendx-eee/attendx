@@ -28,6 +28,7 @@ import '../../admin/master_data/master_home.dart';
 import '../../admin/services/timetable_service.dart';
 import '../../admin/models/period_model.dart';
 import '../../core/constants/app_config.dart';
+import '../../more/account_settings_screen.dart';
 import '../../cr/cr_timetable_screen.dart';
 import '../../timetable/models/timetable_override_model.dart';
 import '../../timetable/services/timetable_override_service.dart';
@@ -671,10 +672,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 );
               },
               onSettings: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text("coming soon!"),
-                      backgroundColor: Colors.orangeAccent),
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => AccountSettingsScreen(student: data),
+                  ),
                 );
               },
               onLeave: () {

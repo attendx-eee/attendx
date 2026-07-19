@@ -28,9 +28,6 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscurePassword = true;
   bool _obscureSecretKey = true;
 
-  /// false = Student login, true = Admin (secret key only).
-  bool _isAdminMode = false;
-
   @override
   void initState() {
     super.initState();
@@ -74,11 +71,17 @@ class _LoginScreenState extends State<LoginScreen> {
       if (result == null) {
         _goHome();
       } else {
+        // Wrong credentials — offer the reset-link flow right away.
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(result),
             backgroundColor: AppColors.danger,
             behavior: SnackBarBehavior.floating,
+            action: SnackBarAction(
+              label: 'Forgot password?',
+              textColor: Colors.white,
+              onPressed: _forgotPassword,
+            ),
           ),
         );
       }
@@ -152,6 +155,224 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  /// Forgot password: sends Firebase's reset email. If the mail isn't
+  /// registered (or never arrives) the user is told to contact the
+  /// administration office.
+  Future<void> _forgotPassword() async {
+    final resetEmailController =
+        TextEditingController(text: emailController.text.trim());
+
+    final email = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadius.lg)),
+        title: const Text('Reset Password'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Enter your registered email. We will send a secure link to set a new password.',
+              style:
+                  TextStyle(fontSize: 13, color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: resetEmailController,
+              keyboardType: TextInputType.emailAddress,
+              autofocus: true,
+              decoration: _inputDecoration(
+                label: 'Email Address',
+                icon: Icons.mail_outline_rounded,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel',
+                style: TextStyle(color: AppColors.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () =>
+                Navigator.pop(context, resetEmailController.text.trim()),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              elevation: 0,
+            ),
+            child: const Text('Send Reset Link'),
+          ),
+        ],
+      ),
+    );
+
+    if (email == null || email.isEmpty || !email.contains('@')) return;
+
+    final code = await authService.sendPasswordReset(email: email);
+    if (!mounted) return;
+
+    String title;
+    String message;
+    IconData icon;
+    Color iconColor;
+
+    if (code == null) {
+      title = 'Reset Link Sent';
+      message =
+          'A password reset link was sent to\n$email\n\nCheck your inbox and spam folder, set a new password from the link, then log in.\n\nIf the email does not arrive within a few minutes, please contact the administration office.';
+      icon = Icons.mark_email_read_rounded;
+      iconColor = AppColors.success;
+    } else if (code == 'user-not-found') {
+      title = 'Email Not Registered';
+      message =
+          'This email is not registered with AttendX.\n\nPlease check the address, or contact the administration office to get your account created.';
+      icon = Icons.error_outline_rounded;
+      iconColor = AppColors.danger;
+    } else if (code == 'invalid-email') {
+      title = 'Invalid Email';
+      message = 'That does not look like a valid email address.';
+      icon = Icons.error_outline_rounded;
+      iconColor = AppColors.warning;
+    } else {
+      title = 'Something Went Wrong';
+      message =
+          'The reset email could not be sent right now. Try again in a moment, or contact the administration office.';
+      icon = Icons.error_outline_rounded;
+      iconColor = AppColors.danger;
+    }
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadius.lg)),
+        icon: Icon(icon, color: iconColor, size: 44),
+        title: Text(title, textAlign: TextAlign.center),
+        content: Text(
+          message,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+              fontSize: 13.5, color: AppColors.textSecondary, height: 1.45),
+        ),
+        actions: [
+          Center(
+            child: ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                elevation: 0,
+              ),
+              child: const Text('OK'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Admin login now lives behind the small icon in the top-right corner.
+  void _showAdminSheet() {
+    secretKeyController.clear();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(
+          left: 24,
+          right: 24,
+          top: 24,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+        ),
+        child: StatefulBuilder(
+          builder: (context, setSheetState) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Icon(Icons.admin_panel_settings_rounded,
+                  size: 40, color: AppColors.primary),
+              const SizedBox(height: 10),
+              const Text(
+                'Admin Access',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Enter the department secret key',
+                textAlign: TextAlign.center,
+                style:
+                    TextStyle(fontSize: 12.5, color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 20),
+              TextField(
+                controller: secretKeyController,
+                obscureText: _obscureSecretKey,
+                autofocus: true,
+                onSubmitted: (_) {
+                  Navigator.pop(context);
+                  _handleAdminLogin();
+                },
+                decoration: _inputDecoration(
+                  label: 'Admin Secret Key',
+                  icon: Icons.vpn_key_rounded,
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscureSecretKey
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      color: AppColors.textSecondary,
+                      size: 20,
+                    ),
+                    onPressed: () => setSheetState(
+                        () => _obscureSecretKey = !_obscureSecretKey),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                height: 52,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _handleAdminLogin();
+                  },
+                  icon: const Icon(Icons.admin_panel_settings_rounded),
+                  label: const Text('Enter Master Data',
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w700)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Only department admins hold this key. All access is logged.',
+                textAlign: TextAlign.center,
+                style:
+                    TextStyle(fontSize: 11.5, color: AppColors.textSecondary),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   /// Face alone is enough — no credentials needed if the face matches.
   Future<void> _handleFaceVerifyAndLogin() async {
     setState(() => _isLoading = true);
@@ -192,38 +413,6 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
-  }
-
-  Widget _modeTab(
-      String label, IconData icon, bool selected, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: selected ? AppColors.primary : Colors.transparent,
-          borderRadius: BorderRadius.circular(100),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon,
-                size: 16,
-                color: selected ? Colors.white : AppColors.textSecondary),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: selected ? Colors.white : AppColors.textSecondary,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   InputDecoration _inputDecoration({
@@ -267,7 +456,23 @@ class _LoginScreenState extends State<LoginScreen> {
       body: GestureDetector(
         onTap: () => FocusScope.of(context).unfocus(),
         child: SafeArea(
-          child: Center(
+          child: Stack(
+            children: [
+              // Small admin entry — tucked in the top-right corner.
+              Positioned(
+                top: 4,
+                right: 4,
+                child: IconButton(
+                  tooltip: 'Admin login',
+                  onPressed: _isLoading ? null : _showAdminSheet,
+                  icon: const Icon(
+                    Icons.admin_panel_settings_outlined,
+                    size: 22,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+              Center(
             child: SingleChildScrollView(
               physics: const BouncingScrollPhysics(),
               padding: const EdgeInsets.symmetric(horizontal: 24.0),
@@ -336,48 +541,15 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                     const SizedBox(height: 6),
-                    Text(
-                      _isAdminMode
-                          ? "Admin access with your secret key"
-                          : "Sign in with your credentials or your face if already Registered",
+                    const Text(
+                      "Sign in with your credentials or your face if already Registered",
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 12.5, color: AppColors.textSecondary),
-                    ),
-                    const SizedBox(height: 22),
-
-                    // ------------------------------------- role toggle
-                    Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(100),
-                        border: Border.all(color: AppColors.divider),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: _modeTab(
-                                "Student", Icons.school_rounded, !_isAdminMode,
-                                () {
-                              setState(() => _isAdminMode = false);
-                            }),
-                          ),
-                          Expanded(
-                            child: _modeTab(
-                                "Admin",
-                                Icons.admin_panel_settings_rounded,
-                                _isAdminMode, () {
-                              setState(() => _isAdminMode = true);
-                            }),
-                          ),
-                        ],
-                      ),
                     ),
                     const SizedBox(height: 24),
 
-                    if (!_isAdminMode) ...[
-                      // ---------------------------------------- input card
+                    // ---------------------------------------- input card
                       Container(
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
@@ -434,7 +606,27 @@ class _LoginScreenState extends State<LoginScreen> {
                                       ? "Enter your password"
                                       : null,
                             ),
-                            const SizedBox(height: 20),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton(
+                                onPressed:
+                                    _isLoading ? null : _forgotPassword,
+                                style: TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 4),
+                                  minimumSize: Size.zero,
+                                ),
+                                child: const Text(
+                                  "Forgot password?",
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.primary,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
                             SizedBox(
                               width: double.infinity,
                               height: 52,
@@ -554,94 +746,12 @@ class _LoginScreenState extends State<LoginScreen> {
                         ],
                       ),
                       const SizedBox(height: 16),
-                    ] else ...[
-                      // ------------------------------------ admin key card
-                      Container(
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: AppColors.surface,
-                          borderRadius: BorderRadius.circular(AppRadius.lg),
-                          boxShadow: const [
-                            BoxShadow(
-                              color: AppColors.shadow,
-                              blurRadius: 16,
-                              offset: Offset(0, 6),
-                            )
-                          ],
-                        ),
-                        child: Column(
-                          children: [
-                            TextField(
-                              controller: secretKeyController,
-                              obscureText: _obscureSecretKey,
-                              onSubmitted: (_) =>
-                                  _isLoading ? null : _handleAdminLogin(),
-                              decoration: _inputDecoration(
-                                label: "Admin Secret Key",
-                                icon: Icons.vpn_key_rounded,
-                                suffixIcon: IconButton(
-                                  icon: Icon(
-                                    _obscureSecretKey
-                                        ? Icons.visibility_off_outlined
-                                        : Icons.visibility_outlined,
-                                    color: AppColors.textSecondary,
-                                    size: 20,
-                                  ),
-                                  onPressed: () => setState(() =>
-                                      _obscureSecretKey = !_obscureSecretKey),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            SizedBox(
-                              width: double.infinity,
-                              height: 52,
-                              child: ElevatedButton.icon(
-                                onPressed:
-                                    _isLoading ? null : _handleAdminLogin,
-                                icon: _isLoading
-                                    ? const SizedBox(
-                                        height: 18,
-                                        width: 18,
-                                        child: CircularProgressIndicator(
-                                            color: Colors.white,
-                                            strokeWidth: 2.5),
-                                      )
-                                    : const Icon(
-                                        Icons.admin_panel_settings_rounded),
-                                label: const Text("Enter Master Data",
-                                    style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w700)),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppColors.primary,
-                                  foregroundColor: Colors.white,
-                                  disabledBackgroundColor:
-                                      AppColors.secondary,
-                                  elevation: 0,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius:
-                                        BorderRadius.circular(AppRadius.sm),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      const Text(
-                        "Only department admins hold this key. All access is logged.",
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            fontSize: 11.5, color: AppColors.textSecondary),
-                      ),
-                      const SizedBox(height: 16),
-                    ],
                   ],
                 ),
               ),
             ),
+          ),
+            ],
           ),
         ),
       ),

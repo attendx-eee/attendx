@@ -4,9 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
-import 'face_enrollment_screen.dart';
-import 'face_verification_screen.dart';
-import 'dashboard/widgets/biometric_status_card.dart';
 import '../services/attendance_service.dart';
 import '../core/responsive/responsive.dart';
 import '../core/theme/app_colors.dart';
@@ -73,8 +70,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       data = snapshot.data()!;
     });
   }
-
-  late final bool isFaceEnrolled = data['faceEnrolled'] ?? false;
 
   Future<void> _pickImage(ImageSource source) async {
     try {
@@ -197,91 +192,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Future<void> _handleBiometricWorkflow(bool isAlreadyEnrolled) async {
-    if (kIsWeb) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-              "Face enrollment needs the device camera — use the mobile app."),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
-
-    if (!isAlreadyEnrolled) {
-      await Navigator.push(
-        context,
-        MaterialPageRoute(builder: (context) => const FaceEnrollmentScreen()),
-      );
-      await loadStudent();
-    } else {
-      final verifySuccess = await Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const FaceVerificationScreen()),
-      );
-
-      if (verifySuccess == true) {
-        if (!mounted) return;
-
-        final proceedToEnroll = await showDialog<bool>(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) => AlertDialog(
-            backgroundColor: AppColors.surface,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(AppRadius.lg)),
-            icon: const Icon(Icons.check_circle_outline_rounded,
-                color: AppColors.success, size: 44),
-            title: Text("Verification Successful", style: AppTextStyles.title),
-            content: Text(
-              "Identity authentications passed. Ready to proceed to update your biometric token registration?",
-              textAlign: TextAlign.center,
-              style: AppTextStyles.body.copyWith(height: 1.4),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text("Cancel",
-                    style: TextStyle(color: AppColors.textSecondary)),
-              ),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context, true),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppRadius.xs)),
-                ),
-                child: const Text("Proceed to Enroll"),
-              ),
-            ],
-          ),
-        );
-
-        if (proceedToEnroll == true) {
-          if (!mounted) return;
-          await Navigator.push(
-            context,
-            MaterialPageRoute(
-                builder: (context) => const FaceEnrollmentScreen()),
-          );
-          await loadStudent();
-        }
-      } else {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Identity verification failed. Adaptation rejected."),
-            backgroundColor: AppColors.danger,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    }
-  }
-
   Map<String, dynamic> _calculateAttendanceProjections() {
     int totalPresent = 0;
     int totalClasses = 0;
@@ -359,12 +269,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             "Email Account", data['email'] ?? 'N/A'),
                       ],
                     ),
-                  ),
-                  SizedBox(height: Responsive.h(24)),
-                  BiometricStatusCard(
-                    enrolled: isFaceEnrolled,
-                    enrolledAt: data["faceEnrolledAt"],
-                    onPressed: () => _handleBiometricWorkflow(isFaceEnrolled),
                   ),
                   SizedBox(height: Responsive.h(24)),
                 ],

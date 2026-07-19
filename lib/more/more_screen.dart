@@ -10,7 +10,9 @@ import '../notifications/notification_screen.dart';
 import '../screens/login.dart';
 
 import '../services/auth_service.dart';
+import '../core/constants/app_config.dart';
 
+import 'account_settings_screen.dart';
 import 'models/more_item.dart';
 import 'widgets/more_profile_card.dart';
 import 'widgets/more_section.dart';
@@ -68,6 +70,20 @@ class MoreScreen extends StatelessWidget {
               builder: (_) => ProfileScreen(
                 studentRawData: student,
               ),
+            ),
+          );
+        },
+      ),
+      MoreItem(
+        title: "Account Settings",
+        subtitle: "Edit details & change password",
+        icon: Icons.manage_accounts_outlined,
+        iconColor: Colors.indigo,
+        onTap: () {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => AccountSettingsScreen(student: student),
             ),
           );
         },
@@ -270,7 +286,7 @@ class MoreScreen extends StatelessWidget {
               SizedBox(height: Responsive.h(20)),
 
               Text(
-                "AttendX v1.0.0",
+                "AttendX v${AppConfig.appVersion}",
                 style: TextStyle(
                   color: Colors.grey,
                   fontSize: Responsive.sp(12),
