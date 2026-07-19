@@ -1,4 +1,4 @@
-import 'package:attendx/screens/login.dart';
+import 'package:attendx/screens/splash_screen.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -70,7 +70,7 @@ class AttendXApp extends StatelessWidget {
           side: BorderSide(color: AppColors.divider),
         ),
       ),
-      home: const LoginScreen(),
+      home: const SplashScreen(),
     );
   }
 }

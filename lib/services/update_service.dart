@@ -9,7 +9,7 @@ import '../core/theme/app_colors.dart';
 /// Self-update check, driven by the Firestore doc `app_meta/android`:
 ///
 /// { latestVersionCode: 3, latestVersion: "1.2.0",
-///   apkUrl: "https://<user>.github.io/<repo>/attendx.apk",
+///   apkUrl: "https://`user`.github.io/`repo`/attendx.apk",
 ///   forceUpdate: false, notes: "Bug fixes..." }
 ///
 /// Called on the login screen. If a newer versionCode exists, the user

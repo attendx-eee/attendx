@@ -158,6 +158,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   _pickImage(ImageSource.gallery);
                 },
               ),
+              if (_profileImage != null || data['profileImageUrl'] != null)
+                _sheetOption(
+                  icon: Icons.delete_outline_rounded,
+                  label: "Remove Photo",
+                  color: AppColors.danger,
+                  onTap: () {
+                    Navigator.pop(context);
+                    _removePhoto();
+                  },
+                ),
             ],
           ),
         ),
@@ -165,10 +175,42 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  Future<void> _removePhoto() async {
+    try {
+      final uid = FirebaseAuth.instance.currentUser!.uid;
+      await FirebaseFirestore.instance.collection('students').doc(uid).update({
+        'profileImageUrl': FieldValue.delete(),
+      });
+
+      if (!mounted) return;
+      setState(() {
+        _profileImage = null;
+        data = Map<String, dynamic>.from(data)..remove('profileImageUrl');
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Profile photo removed."),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Could not remove photo: $e"),
+            backgroundColor: AppColors.danger,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
   Widget _sheetOption({
     required IconData icon,
     required String label,
     required VoidCallback onTap,
+    Color color = AppColors.primary,
   }) {
     return ListTile(
       shape: RoundedRectangleBorder(
@@ -177,10 +219,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       leading: Container(
         padding: Responsive.all(10),
         decoration: BoxDecoration(
-          color: AppColors.primary.withValues(alpha: .1),
+          color: color.withValues(alpha: .1),
           borderRadius: BorderRadius.circular(AppRadius.sm),
         ),
-        child: Icon(icon, color: AppColors.primary, size: 20),
+        child: Icon(icon, color: color, size: 20),
       ),
       title: Text(label, style: AppTextStyles.body.copyWith(
         color: AppColors.textPrimary,
