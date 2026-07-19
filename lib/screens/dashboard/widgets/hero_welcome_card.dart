@@ -35,11 +35,14 @@ class HeroWelcomeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final name = student["name"] ?? "Student";
-    final regNo = student["regNo"] ?? "";
-    final branch = student["branch"] ?? "";
-    final year = student["year"] ?? "";
-    final enrolled = student["faceEnrolled"] ?? false;
+    // .toString() everywhere: these fields may be stored as numbers in
+    // Firestore (e.g. year), and Text() crashes on non-String types.
+    final name = (student["name"] ?? "Student").toString();
+    final regNo = (student["regNo"] ?? "").toString();
+    final branch = (student["branch"] ?? "").toString();
+    final yearRaw = (student["year"] ?? "").toString();
+    final year = yearRaw.isEmpty ? "" : "Year $yearRaw";
+    final enrolled = student["faceEnrolled"] == true;
 
     return Container(
       width: double.infinity,

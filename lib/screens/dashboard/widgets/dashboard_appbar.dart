@@ -93,7 +93,7 @@ class DashboardAppBar extends StatelessWidget
                 SizedBox(height: Responsive.h(2)),
 
                 Text(
-                  student["regNo"] ?? "",
+                  (student["regNo"] ?? "").toString(),
                   style: AppTextStyles.caption,
                 ),
               ],

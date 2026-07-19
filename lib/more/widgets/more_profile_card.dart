@@ -16,9 +16,9 @@ class MoreProfileCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final String name = student["name"] ?? "Student";
-    final String regNo = student["regNo"] ?? "--";
-    final String branch = student["branch"] ?? "Department";
+    final String name = (student["name"] ?? "Student").toString();
+    final String regNo = (student["regNo"] ?? "--").toString();
+    final String branch = (student["branch"] ?? "Department").toString();
     final String semester = student["semester"]?.toString() ?? "";
 
     return Material(
