@@ -1,0 +1,96 @@
+rules_version = '2';
+
+// AttendX production rules — replaces the expired test-mode rules.
+// The Raspberry Pi uses the Admin SDK (service account) which BYPASSES
+// these rules, so nothing here needs to allow the Pi.
+// Deploy: Firebase Console -> Firestore Database -> Rules -> paste -> Publish.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // Role lives on the caller's own student doc ("hod"/"office" = admin).
+    function myRole() {
+      return get(/databases/$(database)/documents/students/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return signedIn() && myRole() in ['hod', 'office'];
+    }
+
+    function isCr() {
+      return signedIn() && myRole() == 'cr';
+    }
+
+    // ---------- students ----------
+    // Signed-in users can read profiles (needed for timetable/CR/admin
+    // screens); users create/update only their own doc; admins manage all.
+    match /students/{uid} {
+      allow read: if signedIn();
+      allow create, update: if isSelf(uid) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ---------- face templates ----------
+    // Readable by signed-in clients (face verification); written by the
+    // owner (enrollment + adaptive learning) or admins.
+    match /student_face_enrollments/{uid} {
+      allow read: if signedIn();
+      allow write: if isSelf(uid) || isAdmin();
+    }
+
+    // ---------- attendance events (written ONLY by the Pi's Admin SDK) ----------
+    // Students read their own; admins read all; NO client writes ever.
+    match /attendance_events/{eventId} {
+      allow read: if signedIn()
+                  && (resource.data.uid == request.auth.uid || isAdmin());
+      allow write: if false;
+    }
+
+    // ---------- notifications ----------
+    // Users read/update/delete their own; any signed-in user may create
+    // (app generates arrival/schedule notifications client-side).
+    match /notifications/{id} {
+      allow read, update, delete: if signedIn()
+                  && (resource.data.studentUid == request.auth.uid || isAdmin());
+      allow create: if signedIn();
+    }
+
+    // ---------- timetables (nested: dept/year/weekday) ----------
+    match /timetables/{path=**} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /timetable_overrides/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin() || isCr();
+    }
+
+    // ---------- reference data managed by admins ----------
+    match /subjects/{id}   { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /faculty/{id}    { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /rooms/{id}      { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /labs/{id}       { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /time_slots/{id} { allow read: if signedIn(); allow write: if isAdmin(); }
+
+    // ---------- app self-update metadata ----------
+    // Read before/without login so the update prompt always works.
+    match /app_meta/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Everything else: denied.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

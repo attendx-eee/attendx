@@ -1,0 +1,19 @@
+# Template — setup.sh fills in @USER@ and @DIR@ and installs it.
+[Unit]
+Description=AttendX face attendance kiosk
+After=network-online.target time-sync.target
+Wants=network-online.target
+# Don't start (and crash-loop) until the secrets/model are in place:
+ConditionPathExists=@DIR@/serviceAccountKey.json
+ConditionPathExists=@DIR@/mobilefacenet.tflite
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@DIR@
+ExecStart=@DIR@/venv/bin/python @DIR@/main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
