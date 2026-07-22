@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/subject_model.dart';
 import '../services/master_data_service.dart';
 import '../widgets/add_subject_dialog.dart';
+import '../widgets/confirm_and_delete.dart';
 import '../widgets/edit_subject_dialog.dart';
 
 class SubjectScreen extends StatefulWidget {
@@ -103,28 +104,19 @@ class _SubjectScreenState extends State<SubjectScreen> {
                                 "Delete",
                                 style: TextStyle(color: Colors.red),
                               ),
-                              onTap: () async {
-                                final confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (context) => AlertDialog(
-                                    title: const Text("Delete Subject"),
-                                    content: Text("Delete ${subject.name}?"),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(context, false),
-                                        child: const Text("Cancel"),
-                                      ),
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(context, true),
-                                        child: const Text("Delete", style: TextStyle(color: Colors.red)),
-                                      ),
-                                    ],
-                                  ),
-                                ) ?? false;
-                                if (confirm) {
-                                  await MasterDataService.instance.deleteSubject(subject.id);
-                                }
-                              },
+                              onTap: () => confirmAndDelete(
+                                context: context,
+                                title: "Delete Subject",
+                                confirmMessage: "Delete ${subject.name}?",
+                                checkInUse: () =>
+                                    MasterDataService.instance.isSubjectScheduled(subject),
+                                inUseMessage:
+                                    "${subject.name} is assigned in the Year ${subject.year} "
+                                    "timetable. Remove or reassign those periods first, then "
+                                    "delete ${subject.name}.",
+                                onDelete: () => MasterDataService.instance
+                                    .deleteSubject(subject.id, subject: subject),
+                              ),
                             ),
                           ],
                         ),

@@ -16,17 +16,33 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == uid;
     }
 
-    // Role lives on the caller's own student doc ("hod"/"office" = admin).
+    // Role usually lives on the caller's own student doc ("hod"/"office" =
+    // admin). Some admin/office accounts (e.g. the fixed admin@attendx.app
+    // login) only ever get a `users/{uid}` doc created for them and have
+    // NO matching `students/{uid}` doc — get() on a missing doc throws in
+    // rules, which silently denies every admin write for that account. So
+    // check `students` first and fall back to `users`.
+    //
+    // Compared case-insensitively: the app's own role checks (RoleRouter,
+    // dashboard) lowercase the value before comparing, so a doc with
+    // "Hod"/"HOD"/"Office" etc. still routes the user into admin screens
+    // client-side — but a case-sensitive rule here would then reject
+    // every single admin write with permission-denied. Matching the
+    // client's leniency avoids that trap.
     function myRole() {
-      return get(/databases/$(database)/documents/students/$(request.auth.uid)).data.role;
+      return exists(/databases/$(database)/documents/students/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/students/$(request.auth.uid)).data.role
+        : (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+            : null);
     }
 
     function isAdmin() {
-      return signedIn() && myRole() in ['hod', 'office'];
+      return signedIn() && myRole() is string && myRole().lower() in ['hod', 'office'];
     }
 
     function isCr() {
-      return signedIn() && myRole() == 'cr';
+      return signedIn() && myRole() is string && myRole().lower() == 'cr';
     }
 
     // ---------- students ----------

@@ -1,7 +1,9 @@
 import 'package:attendx/admin/widgets/add_faculty_dialog.dart';
 import 'package:attendx/admin/widgets/edit_faculty_dialog.dart';
 import 'package:flutter/material.dart';
+import '../models/faculty_model.dart';
 import '../services/master_data_service.dart';
+import '../widgets/confirm_and_delete.dart';
 
 class FacultyScreen extends StatefulWidget {
   const FacultyScreen({super.key});
@@ -11,6 +13,22 @@ class FacultyScreen extends StatefulWidget {
 }
 
 class _FacultyScreenState extends State<FacultyScreen> {
+  Future<void> _handleDelete(BuildContext context, FacultyModel item) {
+    return confirmAndDelete(
+      context: context,
+      title: "Delete Faculty",
+      confirmMessage:
+          "Are you sure you want to delete ${item.name}? This action cannot be undone.",
+      checkInUse: () => MasterDataService.instance.isFacultyScheduled(item.id),
+      inUseMessage:
+          "${item.name} is currently assigned to one or more periods in the "
+          "timetable. Remove or reassign those periods first, then delete "
+          "${item.name}.",
+      onDelete: () =>
+          MasterDataService.instance.deleteFaculty(item.id, facultyName: item.name),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -93,41 +111,7 @@ class _FacultyScreenState extends State<FacultyScreen> {
                           "Delete",
                           style: TextStyle(color: Colors.red),
                         ),
-                        onTap: () async {
-                          final confirm = await showDialog<bool>(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              title: const Text(
-                                "Delete Faculty",
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              content: Text(
-                                "Are you sure you want to delete ${item.name}? This action cannot be undone.",
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context, false),
-                                  child: const Text("Cancel"),
-                                ),
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context, true),
-                                  child: const Text(
-                                    "Delete",
-                                    style: TextStyle(color: Colors.red),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ) ?? false;
-
-                          if (confirm) {
-                            await MasterDataService.instance
-                                .deleteFaculty(item.id);
-                          }
-                        },
+                        onTap: () => _handleDelete(context, item),
                       ),
                     ],
                   ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/lab_model.dart';
 import '../services/master_data_service.dart';
 import '../widgets/add_lab_dialog.dart';
+import '../widgets/confirm_and_delete.dart';
 import '../widgets/edit_lab_dialog.dart';
 
 class LabScreen extends StatefulWidget {
@@ -101,28 +102,19 @@ class _LabScreenState extends State<LabScreen> {
                                 "Delete",
                                 style: TextStyle(color: Colors.red),
                               ),
-                              onTap: () async {
-                                final confirm = await showDialog<bool>(
-                                  context: context,
-                                  builder: (context) => AlertDialog(
-                                    title: const Text("Delete Lab"),
-                                    content: Text("Delete ${lab.name}?"),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(context, false),
-                                        child: const Text("Cancel"),
-                                      ),
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(context, true),
-                                        child: const Text("Delete", style: TextStyle(color: Colors.red)),
-                                      ),
-                                    ],
-                                  ),
-                                ) ?? false;
-                                if (confirm) {
-                                  await MasterDataService.instance.deleteLab(lab.id);
-                                }
-                              },
+                              onTap: () => confirmAndDelete(
+                                context: context,
+                                title: "Delete Lab",
+                                confirmMessage: "Delete ${lab.name}?",
+                                checkInUse: () =>
+                                    MasterDataService.instance.isLabScheduled(lab),
+                                inUseMessage:
+                                    "${lab.name} is assigned in the Year ${lab.year} "
+                                    "timetable. Remove or reassign those lab periods first, "
+                                    "then delete ${lab.name}.",
+                                onDelete: () => MasterDataService.instance
+                                    .deleteLab(lab.id, lab: lab),
+                              ),
                             ),
                           ],
                         ),

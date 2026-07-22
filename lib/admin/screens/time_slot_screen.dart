@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/time_slot_model.dart';
 import '../services/master_data_service.dart';
 import '../widgets/add_time_slot_dialog.dart';
+import '../widgets/confirm_and_delete.dart';
 import '../widgets/edit_time_slot_dialog.dart';
 
 class TimeSlotScreen extends StatefulWidget {
@@ -74,28 +75,19 @@ class _TimeSlotScreenState extends State<TimeSlotScreen> {
                           "Delete",
                           style: TextStyle(color: Colors.red),
                         ),
-                        onTap: () async {
-                          final confirm = await showDialog<bool>(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              title: const Text("Delete Time Slot"),
-                              content: Text("Delete Slot ${slot.slotNumber}?"),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context, false),
-                                  child: const Text("Cancel"),
-                                ),
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context, true),
-                                  child: const Text("Delete", style: TextStyle(color: Colors.red)),
-                                ),
-                              ],
-                            ),
-                          ) ?? false;
-                          if (confirm) {
-                            await MasterDataService.instance.deleteTimeSlot(slot.id);
-                          }
-                        },
+                        onTap: () => confirmAndDelete(
+                          context: context,
+                          title: "Delete Time Slot",
+                          confirmMessage: "Delete Slot ${slot.slotNumber}?",
+                          checkInUse: () =>
+                              MasterDataService.instance.isTimeSlotScheduled(slot),
+                          inUseMessage:
+                              "Slot ${slot.slotNumber} (${slot.startTime}-${slot.endTime}) "
+                              "has classes scheduled against it. Remove those periods "
+                              "from the timetable first, then delete this slot.",
+                          onDelete: () => MasterDataService.instance
+                              .deleteTimeSlot(slot.id, slot: slot),
+                        ),
                       ),
                     ],
                   ),

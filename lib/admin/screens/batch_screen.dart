@@ -35,6 +35,21 @@ class _YearBatchCard extends StatelessWidget {
 
   const _YearBatchCard({required this.year});
 
+  Future<void> _decrement(BuildContext context, int count) async {
+    try {
+      await BatchService.instance.setBatchCount(
+        department: AppConfig.department,
+        year: year,
+        count: count - 1,
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString()), backgroundColor: Colors.redAccent),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -75,13 +90,8 @@ class _YearBatchCard extends StatelessWidget {
                     ),
                     IconButton(
                       icon: const Icon(Icons.remove_circle_outline),
-                      onPressed: count <= 1
-                          ? null
-                          : () => BatchService.instance.setBatchCount(
-                                department: AppConfig.department,
-                                year: year,
-                                count: count - 1,
-                              ),
+                      onPressed:
+                          count <= 1 ? null : () => _decrement(context, count),
                     ),
                     Text("$count",
                         style: theme.textTheme.titleLarge

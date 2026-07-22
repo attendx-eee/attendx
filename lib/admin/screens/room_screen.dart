@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/room_model.dart';
 import '../services/master_data_service.dart';
 import '../widgets/add_room_dialog.dart';
+import '../widgets/confirm_and_delete.dart';
 import '../widgets/edit_room_dialog.dart';
 
 class RoomScreen extends StatefulWidget {
@@ -74,28 +75,19 @@ class _RoomScreenState extends State<RoomScreen> {
                           "Delete",
                           style: TextStyle(color: Colors.red),
                         ),
-                        onTap: () async {
-                          final confirm = await showDialog<bool>(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                              title: const Text("Delete Room"),
-                              content: Text("Delete Room ${room.roomNumber}?"),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context, false),
-                                  child: const Text("Cancel"),
-                                ),
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context, true),
-                                  child: const Text("Delete", style: TextStyle(color: Colors.red)),
-                                ),
-                              ],
-                            ),
-                          ) ?? false;
-                          if (confirm) {
-                            await MasterDataService.instance.deleteRoom(room.id);
-                          }
-                        },
+                        onTap: () => confirmAndDelete(
+                          context: context,
+                          title: "Delete Room",
+                          confirmMessage: "Delete Room ${room.roomNumber}?",
+                          checkInUse: () =>
+                              MasterDataService.instance.isRoomScheduled(room),
+                          inUseMessage:
+                              "Room ${room.roomNumber} is assigned in the timetable. "
+                              "Remove or reassign those periods first, then delete "
+                              "this room.",
+                          onDelete: () => MasterDataService.instance
+                              .deleteRoom(room.id, room: room),
+                        ),
                       ),
                     ],
                   ),
