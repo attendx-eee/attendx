@@ -10,12 +10,12 @@ class AppConfig {
   // App version + self-update. Bump BOTH numbers together with the
   // `version:` line in pubspec.yaml on every release, then update the
   // Firestore doc `app_meta/android` so installed apps prompt to update:
-  //   { latestVersionCode: 2, latestVersion: "1.1.0",
-  //     apkUrl: "https://<user>.github.io/<repo>/attendx.apk",
+  //   { latestVersionCode: 4, latestVersion: "1.2.1",
+  //     apkUrl: "https://`user`.github.io/`repo`/attendx-v1.2.1.apk",
   //     forceUpdate: false, notes: "What's new..." }
   // ------------------------------------------------------------------
-  static const int appVersionCode = 3;
-  static const String appVersion = '1.2.0';
+  static const int appVersionCode = 5;
+  static const String appVersion = '1.2.2';
 
   static const String appMetaCollection = 'app_meta';
   static const String appMetaDoc = 'android';
@@ -46,8 +46,47 @@ class AppConfig {
   static const int onTimeGraceMinutes = 10;
 
   /// Check-in within this many minutes after a period starts still counts
-  /// as present (but is flagged as a late check-in).
+  /// as present (but is flagged as a late check-in). Used for per-period
+  /// (subject-wise) attendance only — see [AttendanceService.periodAttended].
   static const int presentGraceMinutes = 20;
+
+  // ------------------------------------------------------------------
+  // Fixed wall-clock cutoffs for the daily present/late/absent verdict
+  // (see AttendanceService.classifyDay). Unlike the per-period grace
+  // above, these are absolute times of day, not relative to the
+  // timetable's first period:
+  //   checked in at/before 9:15 AM  -> present (on time)
+  //   checked in 9:15-9:30 AM       -> present, but marked late
+  //   checked in after 9:30 AM      -> absent
+  // ------------------------------------------------------------------
+  static const int presentCutoffHour = 9;
+  static const int presentCutoffMinute = 15;
+
+  static const int lateCutoffHour = 9;
+  static const int lateCutoffMinute = 30;
+
+  /// The on-time cutoff (9:15 AM) for a specific date.
+  static DateTime presentCutoffOn(DateTime date) => DateTime(
+      date.year, date.month, date.day, presentCutoffHour, presentCutoffMinute);
+
+  /// The absent cutoff (9:30 AM) for a specific date — checking in after
+  /// this counts as absent even though a check-in event exists.
+  static DateTime lateCutoffOn(DateTime date) => DateTime(
+      date.year, date.month, date.day, lateCutoffHour, lateCutoffMinute);
+
+  /// "9:15 AM" — for admin-facing labels.
+  static String get presentCutoffLabel =>
+      _clockLabel(presentCutoffHour, presentCutoffMinute);
+
+  /// "9:30 AM" — for admin-facing labels.
+  static String get lateCutoffLabel =>
+      _clockLabel(lateCutoffHour, lateCutoffMinute);
+
+  static String _clockLabel(int hour, int minute) {
+    final h = hour > 12 ? hour - 12 : (hour == 0 ? 12 : hour);
+    final ap = hour >= 12 ? 'PM' : 'AM';
+    return '$h:${minute.toString().padLeft(2, '0')} $ap';
+  }
 
   /// Parses "HH:mm" onto a specific date. Returns null if unparseable.
   static DateTime? timeOn(DateTime date, String hhmm) {
