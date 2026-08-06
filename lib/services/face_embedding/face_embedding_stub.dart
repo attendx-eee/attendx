@@ -27,6 +27,14 @@ class FaceEmbeddingService {
     );
   }
 
+  /// Kept for API parity with the native implementation — never reachable
+  /// on web (face features are hidden there).
+  List<double> generateEmbeddingTTA(img.Image croppedFace) {
+    throw UnsupportedError(
+      'Face recognition is not available on the web. Use the mobile app.',
+    );
+  }
+
   List<double> normalizeEmbedding(List<double> embedding) {
     double sum = 0;
 

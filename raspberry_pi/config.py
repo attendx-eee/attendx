@@ -11,6 +11,7 @@ SERVICE_ACCOUNT_FILE = BASE_DIR / "serviceAccountKey.json"
 ATTENDANCE_COLLECTION = "attendance_events"
 ENROLLMENTS_COLLECTION = "student_face_enrollments"
 STUDENTS_COLLECTION = "students"
+TIMETABLE_OVERRIDES_COLLECTION = "timetable_overrides"
 
 DEVICE_ID = "pi-gate-1"
 
@@ -28,8 +29,12 @@ YUNET_FILE = BASE_DIR / "face_detection_yunet_2023mar.onnx"
 # The app uses 0.75 (phone camera matching phone enrollment). The Pi
 # camera differs from the enrollment camera (diag: same person = 0.5-0.6,
 # stranger = ~0.3), so the Pi uses a lower cutoff between those bands.
-MATCH_THRESHOLD = 0.55
-MATCH_MARGIN = 0.04      # required lead over runner-up (2+ students)
+MATCH_THRESHOLD = 0.58
+MATCH_MARGIN = 0.06      # required lead over runner-up (2+ students)
+CONFIRM_MATCHES = 2      # same student must win N consecutive fused
+                         # windows before attendance is recorded — the
+                         # standard temporal-consistency guard against
+                         # one-frame wrong recognitions
 POSE_FALLBACK_TOP_K = 3  # per-pose check for top-K centroid candidates
 FUSE_FRAMES = 3          # average N frames' embeddings before matching
                          # (steadies the Pi's noisy captures, like app's fuse())
@@ -71,6 +76,11 @@ BLINK_MAX_TIMEOUTS = 2        # after this many prompts, scan anyway (the
                               # eye detector can miss blinks with glasses)
 EYE_CASCADE_FILE = BASE_DIR / "haarcascade_eye.xml"
 
+# ---------------- PIR motion sensor ----------------
+PIR_ENABLED = True            # False = camera always on (no sensor wired)
+PIR_GPIO = 17                 # BCM number — physical pin 11
+CAMERA_OFF_AFTER_SECONDS = 30 # no motion & no face this long -> camera off
+
 # ---------------- Behaviour ----------------
 DEBOUNCE_SECONDS = 60          # ignore repeat matches of same student (from notes)
 MIN_MINUTES_BEFORE_CHECKOUT = 20  # don't turn a lingering check-in into a checkout.
@@ -79,18 +89,41 @@ MIN_MINUTES_BEFORE_CHECKOUT = 20  # don't turn a lingering check-in into a check
                                   # within N minutes of checkIn. Set 0 to disable.
 
 # ---------------- Audio ----------------
+# Explicit ALSA device by NAME — no .asoundrc needed, survives reboots
+# and card-number shuffles. The startup also forces volume to 100%.
+AUDIO_DEVICE = "plughw:Headphones,0"
 PROMPTS_DIR = BASE_DIR / "prompts"
+
+# Neural TTS (Piper) — used by generate_prompts.sh for the fixed prompts
+# and live (with caching) for dynamic text like student names.
+PIPER_VOICE = "en_US-amy-medium"   # natural female; try en_US-lessac-medium too
+VOICES_DIR = BASE_DIR / "voices"
+TTS_CACHE_DIR = PROMPTS_DIR / "cache"
 PROMPT_COOLDOWN_SECONDS = 4    # min gap before repeating the same voice prompt
 GLOBAL_PROMPT_GAP_SECONDS = 1.5  # min gap between ANY two prompts (no overlap)
 ESPEAK_VOICE = "en+f3"
 ESPEAK_SPEED = "150"
 ESPEAK_AMPLITUDE = "190"   # 0-200, default 100 — louder for the PAM8403
 
+# ---------------- Timetable override cleanup ----------------
+# CRs mark a period cancelled/postponed/room-changed by writing a doc to
+# `timetable_overrides`; nothing ever deleted it once the class it
+# referred to had ended. The Pi (already the one always-on service with
+# Admin SDK access) sweeps this collection periodically and removes any
+# record whose class end time has passed, so the collection only ever
+# holds what's still relevant. Kept short (2 min) since this is meant to
+# feel close to real-time, not "eventually consistent".
+OVERRIDE_CLEANUP_SECONDS = 120
+
 # ---------------- Offline operation ----------------
 QUEUE_FILE = BASE_DIR / "pending_events.json"
 QUEUE_RETRY_SECONDS = 30
 CACHE_FILE = BASE_DIR / "enrollment_cache.json"  # face templates on disk —
                                                  # matching works offline
-NET_STARTUP_ATTEMPTS = 3      # tries before declaring offline at boot
+NET_STARTUP_ATTEMPTS = 2      # tries before declaring offline at boot
+                              # (kiosk gets ready fast; the background
+                              # reconnect announces when hotspot arrives)
 NET_RECONNECT_SECONDS = 30    # background retry interval when offline
+NET_PROBE_TIMEOUT = 6         # hard cap per startup network attempt
+WRITE_TIMEOUT_SECONDS = 8     # hard cap per attendance write (then queue)
 FIRESTORE_TIMEOUT = 10        # seconds per Firestore call (fail fast offline)

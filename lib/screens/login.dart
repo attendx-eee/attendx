@@ -195,7 +195,8 @@ class _LoginScreenState extends State<LoginScreen> {
       if (result == null) {
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (context) => const MasterHome()),
+          MaterialPageRoute(
+              builder: (context) => MasterHome(onLogout: signOutToLogin)),
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(

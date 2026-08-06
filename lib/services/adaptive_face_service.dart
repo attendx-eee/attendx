@@ -50,6 +50,27 @@ class FaceCandidate {
   }
 }
 
+/// Outcome of a duplicate-enrollment screening (see
+/// [AdaptiveFaceService.findDuplicate]).
+class DuplicateCheckResult {
+  final String? uid;
+  final double bestScore;
+
+  /// How many independent (my pose, their pose) pairs cleared the
+  /// corroboration bar — a single lucky pair isn't enough to accuse
+  /// someone of double-enrolling.
+  final int corroboratingPairs;
+
+  final bool accepted;
+
+  const DuplicateCheckResult({
+    required this.uid,
+    required this.bestScore,
+    required this.corroboratingPairs,
+    required this.accepted,
+  });
+}
+
 /// Outcome of an identification attempt.
 class FaceIdentityResult {
   final String? uid;
@@ -115,6 +136,29 @@ class AdaptiveFaceService {
 
   /// Pose-level scan is limited to the strongest candidates by centroid.
   static const int prefilterTopK = 3;
+
+  // ------------------------------------------------ duplicate screening
+  // Used only at enrollment time (findDuplicate), where BOTH sides have a
+  // full set of pose vectors — not the single-live-frame case identify()
+  // is tuned for. Deliberately separate tuning from matchThreshold:
+  // comparing full pose sets lets genuine same-person pairs score very
+  // high on their best-matching pose pair, and a missed duplicate (two
+  // accounts for one face) is worse than an occasional manual recheck,
+  // so this favors recall.
+  static const double duplicateMatchThreshold = 0.72;
+
+  /// A single high-scoring pose pair can be a fluke (motion blur, a
+  /// lucky angle). Require at least [duplicateMinCorroboratingPairs]
+  /// independent pairs to also clear this lower bar before flagging a
+  /// duplicate, so noise on one frame can't wrongly block a genuinely
+  /// new student.
+  static const double duplicateCorroborationThreshold = 0.60;
+  static const int duplicateMinCorroboratingPairs = 2;
+
+  /// Widen the shortlist for duplicate screening — it runs once per
+  /// registration (not per camera frame), so the extra accuracy is
+  /// worth the cost.
+  static const int duplicatePrefilterTopK = 5;
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
@@ -232,6 +276,84 @@ class AdaptiveFaceService {
       bestScore: bestScore,
       margin: margin,
       accepted: passesThreshold && passesMargin,
+    );
+  }
+
+  // ------------------------------------------------- duplicate screening
+
+  /// Screens a fresh enrollment's full pose set against every other
+  /// student's stored templates to catch someone re-registering the same
+  /// face under a second account.
+  ///
+  /// This is deliberately NOT built on [identify]: identify() compares a
+  /// single live frame against stored per-pose templates, which is right
+  /// for login but wrong here — averaging captures across five very
+  /// different head angles (front/left/right/up/down) into one blended
+  /// vector and then comparing THAT against a candidate's single-pose
+  /// templates dilutes the similarity score and was letting real
+  /// duplicates slip through (systematically under-scoring true matches).
+  /// Here we have a full pose set on both sides, so every one of my
+  /// poses is compared against every one of the candidate's poses and
+  /// the best-matching pair wins — the same technique used for
+  /// multi-template face verification.
+  DuplicateCheckResult findDuplicate({
+    required Map<String, List<double>> livePoses,
+    required List<double> liveCentroid,
+    required List<FaceCandidate> candidates,
+  }) {
+    if (candidates.isEmpty) {
+      return const DuplicateCheckResult(
+          uid: null, bestScore: -1, corroboratingPairs: 0, accepted: false);
+    }
+
+    final myVectors =
+        livePoses.values.where((v) => v.isNotEmpty).toList();
+
+    // Stage 1: centroid prefilter, widened shortlist (see tuning notes).
+    final ranked = candidates
+        .map((c) => MapEntry(c, cosine(liveCentroid, c.centroid)))
+        .toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    final shortlist =
+        ranked.take(duplicatePrefilterTopK).map((e) => e.key).toList();
+
+    String? bestUid;
+    double bestScore = -1.0;
+    int bestCorroborating = 0;
+
+    // Stage 2: full cross-pose comparison on the shortlist.
+    for (final candidate in shortlist) {
+      final theirVectors = candidate.poseEmbeddings.values
+          .where((v) => v.isNotEmpty)
+          .toList();
+
+      double candidateBest = -1.0;
+      int corroborating = 0;
+
+      for (final mine in myVectors) {
+        for (final theirs in theirVectors) {
+          final s = cosine(mine, theirs);
+          if (s > candidateBest) candidateBest = s;
+          if (s >= duplicateCorroborationThreshold) corroborating++;
+        }
+      }
+
+      if (candidateBest > bestScore) {
+        bestScore = candidateBest;
+        bestUid = candidate.uid;
+        bestCorroborating = corroborating;
+      }
+    }
+
+    final accepted = bestScore >= duplicateMatchThreshold &&
+        bestCorroborating >= duplicateMinCorroboratingPairs;
+
+    return DuplicateCheckResult(
+      uid: bestUid,
+      bestScore: bestScore,
+      corroboratingPairs: bestCorroborating,
+      accepted: accepted,
     );
   }
 

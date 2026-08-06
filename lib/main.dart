@@ -2,7 +2,7 @@ import 'package:attendx/screens/splash_screen.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'core/theme/app_colors.dart';
+import 'core/theme/app_theme.dart';
 import 'firebase_options.dart';
 import 'services/face_embedding_service.dart';
 import 'package:flutter_litert/flutter_litert.dart';
@@ -40,36 +40,7 @@ class AttendXApp extends StatelessWidget {
       title: 'AttendX',
       debugShowCheckedModeBanner: false,
       // Brand theme derived from the AttendX logo (blue -> teal).
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: AppColors.primary,
-          primary: AppColors.primary,
-          secondary: AppColors.teal,
-        ),
-        scaffoldBackgroundColor: AppColors.background,
-        appBarTheme: const AppBarTheme(
-          backgroundColor: AppColors.surface,
-          foregroundColor: AppColors.textPrimary,
-          elevation: 0,
-          centerTitle: false,
-        ),
-        filledButtonTheme: FilledButtonThemeData(
-          style: FilledButton.styleFrom(
-            backgroundColor: AppColors.primary,
-            foregroundColor: Colors.white,
-          ),
-        ),
-        floatingActionButtonTheme: const FloatingActionButtonThemeData(
-          backgroundColor: AppColors.primary,
-          foregroundColor: Colors.white,
-        ),
-        progressIndicatorTheme:
-            const ProgressIndicatorThemeData(color: AppColors.primary),
-        chipTheme: ChipThemeData(
-          side: BorderSide(color: AppColors.divider),
-        ),
-      ),
+      theme: AppTheme.light,
       home: const SplashScreen(),
     );
   }

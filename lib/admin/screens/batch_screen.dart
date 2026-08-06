@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../core/constants/app_config.dart';
+import '../../core/theme/app_colors.dart';
 import '../services/batch_service.dart';
+import '../widgets/management_icon_avatar.dart';
 
 /// Admin: set how many lab batches each year is divided into.
 /// 2 batches = Batch A + Batch B. Lab periods in the timetable can then
@@ -75,12 +77,9 @@ class _YearBatchCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    CircleAvatar(
-                      backgroundColor:
-                          theme.colorScheme.primaryContainer,
-                      child: Text("Y$year",
-                          style: const TextStyle(
-                              fontWeight: FontWeight.bold, fontSize: 13)),
+                    const ManagementIconAvatar(
+                      icon: Icons.groups_rounded,
+                      color: AppColors.primary,
                     ),
                     const SizedBox(width: 12),
                     Expanded(

@@ -1,0 +1,97 @@
+name: Deploy admin console
+
+# Builds the AttendX admin console for the web and publishes it to GitHub
+# Pages, alongside the existing APK download page.
+#
+# The site ends up as:
+#   https://ganga2006.github.io/attendx/         -> APK download page (docs/)
+#   https://ganga2006.github.io/attendx/admin/   -> admin console (this build)
+#
+# Only the admin entry point is built. `lib/main.dart` pulls in TFLite,
+# ML Kit, the camera and `dart:io` for face enrollment, none of which
+# compile for the web — `lib/main_web.dart` reaches only the admin
+# screens, which are plain Flutter + Firestore.
+
+on:
+  push:
+    branches: [main]
+    # Skip the build when a push touched nothing the console is made of.
+    paths:
+      - 'lib/**'
+      - 'web/**'
+      - 'docs/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - '.github/workflows/deploy-admin-web.yml'
+  # Lets you re-deploy from the Actions tab without pushing a commit.
+  workflow_dispatch:
+
+# Pages needs these; `contents: read` alone will fail the deploy step.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race. In-progress runs are allowed to finish so a
+# half-published site is never left live.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        # Doesn't block the deploy — the mobile-only sources (camera, face
+        # enrollment) legitimately raise web-irrelevant hints in this job.
+        run: flutter analyze --no-fatal-infos || true
+
+      - name: Build admin console
+        # base-href must match the repo subpath, with both slashes, or
+        # every asset 404s once it's served from /attendx/admin/.
+        run: |
+          flutter build web \
+            --release \
+            -t lib/main_web.dart \
+            --base-href /attendx/admin/
+
+      - name: Assemble the site
+        run: |
+          mkdir -p _site
+          # The APK download page stays at the root.
+          cp -r docs/. _site/
+          # The console goes in its own folder underneath it.
+          mkdir -p _site/admin
+          cp -r build/web/. _site/admin/
+          # Pages runs Jekyll by default, which strips files and folders
+          # beginning with an underscore — Flutter emits some.
+          touch _site/.nojekyll
+
+      - name: Upload the artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

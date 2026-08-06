@@ -1,4 +1,8 @@
 import 'package:flutter/material.dart';
+import '../../core/responsive/responsive.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_radius.dart';
+import '../../core/theme/app_text_styles.dart';
 import '../models/faculty_model.dart';
 import '../models/lab_model.dart';
 import '../models/period_model.dart';
@@ -8,6 +12,61 @@ import '../models/time_slot_model.dart';
 import '../services/batch_service.dart';
 import '../services/master_data_service.dart';
 import '../services/timetable_service.dart';
+import '../widgets/add_time_slot_dialog.dart';
+import '../widgets/add_subject_dialog.dart';
+import '../widgets/add_lab_dialog.dart';
+import '../widgets/add_faculty_dialog.dart';
+import '../widgets/add_room_dialog.dart';
+
+/// Theory and Lab periods are color-coded so a glance at the grid tells
+/// you which is which — the same "color-coded classes" convention used
+/// by every modern timetable app.
+Color _classTypeColor(String classType) =>
+    classType == 'Lab' ? AppColors.teal : AppColors.primary;
+
+/// Time slots are stored as 24-hour "H:mm" strings (e.g. "14:30") — this
+/// renders them the way people actually read a timetable: "2:30 PM".
+String _to12Hour(String time24) {
+  final parts = time24.split(':');
+  if (parts.length != 2) return time24;
+
+  final hour24 = int.tryParse(parts[0]);
+  final minute = parts[1].padLeft(2, '0');
+  if (hour24 == null) return time24;
+
+  final period = hour24 >= 12 ? 'PM' : 'AM';
+  var hour12 = hour24 % 12;
+  if (hour12 == 0) hour12 = 12;
+
+  return '$hour12:$minute $period';
+}
+
+InputDecoration _fieldDecoration({
+  required String label,
+  required IconData icon,
+}) {
+  return InputDecoration(
+    labelText: label,
+    prefixIcon: Icon(icon, size: 20, color: AppColors.primary),
+    filled: true,
+    fillColor: AppColors.background,
+    labelStyle: const TextStyle(color: AppColors.textSecondary, fontSize: 13.5),
+    contentPadding:
+        const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(AppRadius.sm),
+      borderSide: const BorderSide(color: AppColors.divider),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(AppRadius.sm),
+      borderSide: const BorderSide(color: AppColors.divider),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(AppRadius.sm),
+      borderSide: const BorderSide(color: AppColors.primary, width: 1.6),
+    ),
+  );
+}
 
 class TimetableManagementScreen extends StatefulWidget {
   const TimetableManagementScreen({super.key});
@@ -240,6 +299,42 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
     }
   }
 
+  /// Long-press on a period card triggers this — asks for confirmation
+  /// before removing a scheduled class, since a stray long-press
+  /// shouldn't be able to silently wipe a period off the timetable.
+  Future<void> _confirmDeletePeriod(String day, PeriodModel period) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadius.lg)),
+        icon: const Icon(Icons.delete_outline_rounded,
+            color: AppColors.danger, size: 34),
+        title: const Text('Remove this period?', textAlign: TextAlign.center),
+        content: Text(
+          '${period.subject.isEmpty ? period.classType : period.subject} on '
+          '$day will be removed from the timetable.',
+          textAlign: TextAlign.center,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _deletePeriod(day, period.periodNo);
+    }
+  }
+
   Future<void> _showEditPeriodDialog(String day, PeriodModel period) async {
     bool isLab = period.classType == 'Lab';
     SubjectModel? selectedSubject;
@@ -251,7 +346,18 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: Text('Edit ${period.classType} period'),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppRadius.lg)),
+          icon: Icon(
+            period.classType == 'Lab'
+                ? Icons.science_rounded
+                : Icons.menu_book_rounded,
+            color: _classTypeColor(period.classType),
+            size: 34,
+          ),
+          title: Text('Edit ${period.classType} Period',
+              textAlign: TextAlign.center,
+              style: AppTextStyles.title),
           content: SizedBox(
             width: 360,
             child: StatefulBuilder(
@@ -309,10 +415,9 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
                                       if (isLab)
                                         DropdownButtonFormField<LabModel>(
                                           initialValue: selectedLab,
-                                          decoration: const InputDecoration(
-                                            labelText: 'Lab',
-                                            border: OutlineInputBorder(),
-                                            prefixIcon: Icon(Icons.science),
+                                          decoration: _fieldDecoration(
+                                            label: 'Lab',
+                                            icon: Icons.science_rounded,
                                           ),
                                           items: labs
                                               .map((lab) => DropdownMenuItem(
@@ -329,10 +434,9 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
                                       else
                                         DropdownButtonFormField<SubjectModel>(
                                           initialValue: selectedSubject,
-                                          decoration: const InputDecoration(
-                                            labelText: 'Subject',
-                                            border: OutlineInputBorder(),
-                                            prefixIcon: Icon(Icons.book),
+                                          decoration: _fieldDecoration(
+                                            label: 'Subject',
+                                            icon: Icons.menu_book_rounded,
                                           ),
                                           items: subjects
                                               .map((subject) => DropdownMenuItem(
@@ -349,10 +453,9 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
                                       const SizedBox(height: 12),
                                       DropdownButtonFormField<FacultyModel>(
                                         initialValue: selectedFaculty,
-                                        decoration: const InputDecoration(
-                                          labelText: 'Faculty',
-                                          border: OutlineInputBorder(),
-                                          prefixIcon: Icon(Icons.person),
+                                        decoration: _fieldDecoration(
+                                          label: 'Faculty',
+                                          icon: Icons.person_rounded,
                                         ),
                                         items: faculty
                                             .map((item) => DropdownMenuItem(
@@ -369,10 +472,9 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
                                       const SizedBox(height: 12),
                                       DropdownButtonFormField<RoomModel>(
                                         initialValue: selectedRoom,
-                                        decoration: const InputDecoration(
-                                          labelText: 'Room',
-                                          border: OutlineInputBorder(),
-                                          prefixIcon: Icon(Icons.meeting_room),
+                                        decoration: _fieldDecoration(
+                                          label: 'Room',
+                                          icon: Icons.meeting_room_rounded,
                                         ),
                                         items: rooms
                                             .where((item) => item.active)
@@ -458,99 +560,195 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    Responsive.init(context);
 
     return Scaffold(
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('Timetable Management'),
+        backgroundColor: AppColors.background,
+        surfaceTintColor: AppColors.background,
+        elevation: 0,
+        foregroundColor: AppColors.textPrimary,
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh',
+            icon: const Icon(Icons.refresh_rounded),
             onPressed: _refreshTimetable,
           ),
         ],
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [theme.colorScheme.surface, theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.2)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Plan and manage class schedules', style: theme.textTheme.titleMedium?.copyWith(color: theme.colorScheme.primary)),
-              const SizedBox(height: 16),
-              _buildFilterCard(theme),
-              const SizedBox(height: 16),
-              _buildAddPeriodForm(theme),
-              const SizedBox(height: 16),
-              _buildTimetablePreview(theme),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFilterCard(ThemeData theme) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(18),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Select Year', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              children: List.generate(4, (index) {
-                final year = index + 1;
-                return FilterChip(
-                  selected: _selectedYear == year,
-                  label: Text('Year $year'),
-                  onSelected: (selected) {
-                    setState(() => _selectedYear = year);
-                    _refreshTimetable();
-                  },
-                );
-              }),
-            ),
+            _buildHeroHeader(),
+            const SizedBox(height: 18),
+            _buildFilterCard(theme),
             const SizedBox(height: 16),
-            Text('Select Day', style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: days.map((day) {
-                return FilterChip(
-                  selected: _selectedDay == day,
-                  label: Text(day),
-                  onSelected: (selected) {
-                    setState(() => _selectedDay = day);
-                    _refreshTimetable();
-                  },
-                );
-              }).toList(),
-            ),
+            _buildAddPeriodForm(theme),
+            const SizedBox(height: 16),
+            _buildTimetablePreview(theme),
           ],
         ),
       ),
     );
   }
 
+  Widget _buildHeroHeader() {
+    return Container(
+      width: double.infinity,
+      padding: Responsive.all(22),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(Responsive.radius(24)),
+        gradient: AppColors.brandGradient,
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            right: -30,
+            top: -30,
+            child: Container(
+              width: Responsive.w(120),
+              height: Responsive.w(120),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: .08),
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+          Row(
+            children: [
+              Container(
+                width: Responsive.w(52),
+                height: Responsive.w(52),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: .16),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.calendar_month_rounded,
+                    color: Colors.white, size: Responsive.sp(26)),
+              ),
+              SizedBox(width: Responsive.w(16)),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Plan & Manage Class Schedules',
+                        style: AppTextStyles.title.copyWith(color: Colors.white)),
+                    SizedBox(height: Responsive.h(4)),
+                    Text(
+                      'Build the weekly timetable, slot by slot',
+                      style: AppTextStyles.body.copyWith(color: Colors.white70),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterCard(ThemeData theme) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        boxShadow: const [
+          BoxShadow(
+              color: AppColors.shadow, blurRadius: 16, offset: Offset(0, 6)),
+        ],
+      ),
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Year', style: AppTextStyles.caption.copyWith(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: List.generate(4, (index) {
+              final year = index + 1;
+              return _FilterPill(
+                label: 'Year $year',
+                selected: _selectedYear == year,
+                onTap: () {
+                  setState(() => _selectedYear = year);
+                  _refreshTimetable();
+                },
+              );
+            }),
+          ),
+          const SizedBox(height: 18),
+          Text('Add periods to', style: AppTextStyles.caption.copyWith(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: days.map((day) {
+              return _FilterPill(
+                label: day,
+                selected: _selectedDay == day,
+                onTap: () {
+                  setState(() => _selectedDay = day);
+                  _refreshTimetable();
+                },
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Pairs a dropdown with a small "+" button so admins can create a
+  /// missing Subject/Lab/Faculty/Room/Time Slot right from this form
+  /// instead of having to leave and go to Master Data first. The add
+  /// dialogs write straight to Firestore via MasterDataService, and every
+  /// dropdown here is fed by a live stream, so the new item shows up
+  /// immediately — both in this form and in every other screen watching
+  /// the same collection.
+  Widget _buildDropdownWithQuickAdd<T>({
+    required Widget dropdown,
+    required String tooltip,
+    required VoidCallback onAddNew,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(child: dropdown),
+        const SizedBox(width: 8),
+        Container(
+          decoration: BoxDecoration(
+            color: AppColors.primary.withValues(alpha: .1),
+            borderRadius: BorderRadius.circular(AppRadius.sm),
+          ),
+          child: IconButton(
+            tooltip: tooltip,
+            icon: const Icon(Icons.add_rounded, color: AppColors.primary),
+            onPressed: onAddNew,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildAddPeriodForm(ThemeData theme) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: StreamBuilder<List<TimeSlotModel>>(
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        boxShadow: const [
+          BoxShadow(
+              color: AppColors.shadow, blurRadius: 16, offset: Offset(0, 6)),
+        ],
+      ),
+      padding: const EdgeInsets.all(18),
+      child: StreamBuilder<List<TimeSlotModel>>(
           stream: slotsStream,
           builder: (context, slotsSnapshot) {
             if (!slotsSnapshot.hasData) {
@@ -591,16 +789,30 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
                           children: [
                             Row(
                               children: [
-                                Icon(Icons.schedule, color: theme.colorScheme.primary),
-                                const SizedBox(width: 8),
-                                Text('Add Period', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.primary.withValues(alpha: .1),
+                                    borderRadius: BorderRadius.circular(AppRadius.xs),
+                                  ),
+                                  child: const Icon(Icons.add_task_rounded,
+                                      color: AppColors.primary, size: 18),
+                                ),
+                                const SizedBox(width: 10),
+                                Text('Add Period', style: AppTextStyles.title),
                               ],
                             ),
-                            const SizedBox(height: 12),
+                            const SizedBox(height: 16),
                             SegmentedButton<String>(
+                              style: SegmentedButton.styleFrom(
+                                selectedBackgroundColor: AppColors.primary,
+                                selectedForegroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(AppRadius.sm)),
+                              ),
                               segments: const [
-                                ButtonSegment(value: 'Theory', icon: Icon(Icons.book), label: Text('Theory')),
-                                ButtonSegment(value: 'Lab', icon: Icon(Icons.science), label: Text('Lab')),
+                                ButtonSegment(value: 'Theory', icon: Icon(Icons.menu_book_rounded), label: Text('Theory')),
+                                ButtonSegment(value: 'Lab', icon: Icon(Icons.science_rounded), label: Text('Lab')),
                               ],
                               selected: {_isLabClass ? 'Lab' : 'Theory'},
                               onSelectionChanged: (selection) {
@@ -611,22 +823,27 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
                                 });
                               },
                             ),
-                            const SizedBox(height: 12),
-                            DropdownButtonFormField<TimeSlotModel>(
-                              initialValue: _selectedSlot,
-                              decoration: const InputDecoration(
-                                labelText: 'Time Slot',
-                                border: OutlineInputBorder(),
-                                prefixIcon: Icon(Icons.access_time),
+                            const SizedBox(height: 14),
+                            _buildDropdownWithQuickAdd<TimeSlotModel>(
+                              dropdown: DropdownButtonFormField<TimeSlotModel>(
+                                initialValue: _selectedSlot,
+                                decoration: _fieldDecoration(
+                                    label: 'Time Slot', icon: Icons.access_time_rounded),
+                                items: slots
+                                    .where((slot) => slot.active)
+                                    .map((slot) => DropdownMenuItem(
+                                          value: slot,
+                                          child: Text(
+                                              '${slot.slotNumber}: ${_to12Hour(slot.startTime)} - ${_to12Hour(slot.endTime)}'),
+                                        ))
+                                    .toList(),
+                                onChanged: (value) => setState(() => _selectedSlot = value),
                               ),
-                              items: slots
-                                  .where((slot) => slot.active)
-                                  .map((slot) => DropdownMenuItem(
-                                        value: slot,
-                                        child: Text('${slot.slotNumber}: ${slot.startTime} - ${slot.endTime}'),
-                                      ))
-                                  .toList(),
-                              onChanged: (value) => setState(() => _selectedSlot = value),
+                              tooltip: 'Add a new time slot',
+                              onAddNew: () => showDialog(
+                                context: context,
+                                builder: (context) => const AddTimeSlotDialog(),
+                              ),
                             ),
                             const SizedBox(height: 12),
                             if (_isLabClass)
@@ -641,30 +858,32 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
 
                                   return Column(
                                     children: [
-                                      DropdownButtonFormField<LabModel>(
-                                        initialValue: _selectedLab,
-                                        decoration: const InputDecoration(
-                                          labelText: 'Lab',
-                                          border: OutlineInputBorder(),
-                                          prefixIcon: Icon(Icons.science),
+                                      _buildDropdownWithQuickAdd<LabModel>(
+                                        dropdown: DropdownButtonFormField<LabModel>(
+                                          initialValue: _selectedLab,
+                                          decoration: _fieldDecoration(
+                                              label: 'Lab', icon: Icons.science_rounded),
+                                          items: labs
+                                              .map((lab) => DropdownMenuItem(
+                                                    value: lab,
+                                                    child: Text(lab.name),
+                                                  ))
+                                              .toList(),
+                                          onChanged: (value) => setState(() => _selectedLab = value),
                                         ),
-                                        items: labs
-                                            .map((lab) => DropdownMenuItem(
-                                                  value: lab,
-                                                  child: Text(lab.name),
-                                                ))
-                                            .toList(),
-                                        onChanged: (value) => setState(() => _selectedLab = value),
+                                        tooltip: 'Add a new lab for Year $_selectedYear',
+                                        onAddNew: () => showDialog(
+                                          context: context,
+                                          builder: (context) =>
+                                              AddLabDialog(initialYear: _selectedYear),
+                                        ),
                                       ),
                                       const SizedBox(height: 12),
                                       if (_batchCountForYear > 1) ...[
                                         DropdownButtonFormField<String>(
                                           initialValue: _selectedBatch,
-                                          decoration: const InputDecoration(
-                                            labelText: 'Batch',
-                                            border: OutlineInputBorder(),
-                                            prefixIcon: Icon(Icons.groups),
-                                          ),
+                                          decoration: _fieldDecoration(
+                                              label: 'Batch', icon: Icons.groups_rounded),
                                           items: [
                                             const DropdownMenuItem(
                                               value: '',
@@ -687,63 +906,84 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
                                 },
                               )
                             else
-                              DropdownButtonFormField<SubjectModel>(
-                                initialValue: _selectedSubject,
-                                decoration: const InputDecoration(
-                                  labelText: 'Subject',
-                                  border: OutlineInputBorder(),
-                                  prefixIcon: Icon(Icons.book),
+                              _buildDropdownWithQuickAdd<SubjectModel>(
+                                dropdown: DropdownButtonFormField<SubjectModel>(
+                                  initialValue: _selectedSubject,
+                                  decoration: _fieldDecoration(
+                                      label: 'Subject', icon: Icons.menu_book_rounded),
+                                  items: subjects
+                                      .map((subject) => DropdownMenuItem(
+                                            value: subject,
+                                            child: Text(subject.name),
+                                          ))
+                                      .toList(),
+                                  onChanged: (value) => setState(() => _selectedSubject = value),
                                 ),
-                                items: subjects
-                                    .map((subject) => DropdownMenuItem(
-                                          value: subject,
-                                          child: Text(subject.name),
+                                tooltip: 'Add a new subject for Year $_selectedYear',
+                                onAddNew: () => showDialog(
+                                  context: context,
+                                  builder: (context) =>
+                                      AddSubjectDialog(initialYear: _selectedYear),
+                                ),
+                              ),
+                            const SizedBox(height: 12),
+                            _buildDropdownWithQuickAdd<FacultyModel>(
+                              dropdown: DropdownButtonFormField<FacultyModel>(
+                                initialValue: _selectedFaculty,
+                                decoration: _fieldDecoration(
+                                    label: 'Faculty', icon: Icons.person_rounded),
+                                items: faculty
+                                    .map((fac) => DropdownMenuItem(
+                                          value: fac,
+                                          child: Text(fac.name),
                                         ))
                                     .toList(),
-                                onChanged: (value) => setState(() => _selectedSubject = value),
+                                onChanged: (value) => setState(() => _selectedFaculty = value),
                               ),
-                            const SizedBox(height: 12),
-                            DropdownButtonFormField<FacultyModel>(
-                              initialValue: _selectedFaculty,
-                              decoration: const InputDecoration(
-                                labelText: 'Faculty',
-                                border: OutlineInputBorder(),
-                                prefixIcon: Icon(Icons.person),
+                              tooltip: 'Add a new faculty member',
+                              onAddNew: () => showDialog(
+                                context: context,
+                                builder: (context) => const AddFacultyDialog(),
                               ),
-                              items: faculty
-                                  .map((fac) => DropdownMenuItem(
-                                        value: fac,
-                                        child: Text(fac.name),
-                                      ))
-                                  .toList(),
-                              onChanged: (value) => setState(() => _selectedFaculty = value),
                             ),
                             const SizedBox(height: 12),
-                            DropdownButtonFormField<RoomModel>(
-                              initialValue: _selectedRoom,
-                              decoration: const InputDecoration(
-                                labelText: 'Room',
-                                border: OutlineInputBorder(),
-                                prefixIcon: Icon(Icons.meeting_room),
+                            _buildDropdownWithQuickAdd<RoomModel>(
+                              dropdown: DropdownButtonFormField<RoomModel>(
+                                initialValue: _selectedRoom,
+                                decoration: _fieldDecoration(
+                                    label: 'Room', icon: Icons.meeting_room_rounded),
+                                items: rooms
+                                    .where((room) => room.active)
+                                    .map((room) => DropdownMenuItem(
+                                          value: room,
+                                          child: Text('Room ${room.roomNumber} (${room.type})'),
+                                        ))
+                                    .toList(),
+                                onChanged: (value) => setState(() => _selectedRoom = value),
                               ),
-                              items: rooms
-                                  .where((room) => room.active)
-                                  .map((room) => DropdownMenuItem(
-                                        value: room,
-                                        child: Text('Room ${room.roomNumber} (${room.type})'),
-                                      ))
-                                  .toList(),
-                              onChanged: (value) => setState(() => _selectedRoom = value),
+                              tooltip: 'Add a new room',
+                              onAddNew: () => showDialog(
+                                context: context,
+                                builder: (context) => const AddRoomDialog(),
+                              ),
                             ),
-                            const SizedBox(height: 16),
+                            const SizedBox(height: 18),
                             SizedBox(
                               width: double.infinity,
+                              height: 48,
                               child: FilledButton.icon(
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: AppColors.primary,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius:
+                                          BorderRadius.circular(AppRadius.sm)),
+                                ),
                                 onPressed: _isSaving ? null : _addPeriod,
                                 icon: _isSaving
-                                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                                    : const Icon(Icons.add_circle_outline),
-                                label: const Text('Add to timetable'),
+                                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                    : const Icon(Icons.add_circle_outline_rounded),
+                                label: const Text('Add to Timetable',
+                                    style: TextStyle(fontWeight: FontWeight.w700)),
                               ),
                             ),
                           ],
@@ -756,171 +996,307 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
             );
           },
         ),
-      ),
     );
   }
 
   Widget _buildTimetablePreview(ThemeData theme) {
-    return Card(
-      elevation: 0,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.view_agenda, color: theme.colorScheme.primary),
-                const SizedBox(width: 8),
-                Text('Year $_selectedYear timetable', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-              ],
-            ),
-            const SizedBox(height: 12),
-            StreamBuilder<List<TimeSlotModel>>(
-              stream: slotsStream,
-              builder: (context, slotsSnapshot) {
-                if (!slotsSnapshot.hasData) {
-                  return const Center(child: CircularProgressIndicator());
-                }
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        boxShadow: const [
+          BoxShadow(color: AppColors.shadow, blurRadius: 16, offset: Offset(0, 6)),
+        ],
+      ),
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildPreviewHeaderRow(),
+          const SizedBox(height: 14),
+          StreamBuilder<List<TimeSlotModel>>(
+            stream: slotsStream,
+            builder: (context, slotsSnapshot) {
+              if (!slotsSnapshot.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
 
-                final allSlots = slotsSnapshot.data ?? [];
-                if (allSlots.isEmpty) {
-                  return const Text('No time slots available.');
-                }
+              final allSlots = slotsSnapshot.data ?? [];
+              if (allSlots.isEmpty) {
+                return const Text('No time slots available.');
+              }
 
-                // Only slots this year's timetable actually uses.
-                final slots = _slotsUsedThisWeek(allSlots);
-                if (slots.isEmpty) {
-                  return const Padding(
-                    padding: EdgeInsets.all(12),
-                    child: Text(
-                        'No classes scheduled yet for this year. Add periods above to build the timetable.'),
-                  );
-                }
-
-                return Container(
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surface,
-                    borderRadius: BorderRadius.circular(18),
-                    border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.7)),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.04),
-                        blurRadius: 18,
-                        offset: const Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: DataTable(
-                      columnSpacing: 14,
-                      horizontalMargin: 12,
-                      dividerThickness: 0.7,
-                      headingRowColor: WidgetStateProperty.resolveWith((states) => theme.colorScheme.primaryContainer.withValues(alpha: 0.35)),
-                      headingTextStyle: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold, color: theme.colorScheme.primary),
-                      dataTextStyle: theme.textTheme.bodySmall?.copyWith(height: 1.35),
-                      dataRowMinHeight: 84,
-                      dataRowMaxHeight: 110,
-                      columns: [
-                        const DataColumn(label: Text('Time slot')),
-                        ...days.map((day) => DataColumn(label: Text(day))),
-                      ],
-                      rows: slots.map((slot) {
-                        return DataRow(
-                          cells: [
-                            DataCell(
-                              Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 8),
-                                child: Text(
-                                  '${slot.startTime}\n${slot.endTime}',
-                                  style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
-                                ),
-                              ),
-                            ),
-                            ...days.map((day) {
-                              final period = _getPeriodForDayAndSlot(day, slot);
-                              if (period == null) {
-                                return const DataCell(Text('—'));
-                              }
-
-                              return DataCell(
-                                Container(
-                                  width: 132,
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    gradient: LinearGradient(
-                                      colors: [theme.colorScheme.primaryContainer.withValues(alpha: 0.65), theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.85)],
-                                      begin: Alignment.topLeft,
-                                      end: Alignment.bottomRight,
-                                    ),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.15)),
-                                  ),
-                                  child: Stack(
-                                    children: [
-                                      Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            period.subject.isEmpty ? 'Free slot' : period.subject,
-                                            style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
-                                            maxLines: 2,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            period.batch.isEmpty
-                                                ? period.classType
-                                                : '${period.classType} • Batch ${period.batch}',
-                                            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.w600),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            '${period.facultyName.isEmpty ? 'Unassigned' : period.facultyName}\nRoom ${period.room.isEmpty ? '—' : period.room}',
-                                            style: theme.textTheme.bodySmall,
-                                            maxLines: 3,
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ],
-                                      ),
-                                      Positioned(
-                                        right: 0,
-                                        top: 0,
-                                        child: PopupMenuButton<String>(
-                                          tooltip: 'Edit or delete period',
-                                          iconColor: theme.colorScheme.primary,
-                                          iconSize: 18,
-                                          onSelected: (value) {
-                                            if (value == 'edit') {
-                                              _showEditPeriodDialog(day, period);
-                                            } else if (value == 'delete') {
-                                              _deletePeriod(day, period.periodNo);
-                                            }
-                                          },
-                                          itemBuilder: (context) => [
-                                            const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                                            const PopupMenuItem(value: 'delete', child: Text('Delete')),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            }),
-                          ],
-                        );
-                      }).toList(),
-                    ),
-                  ),
+              // Only slots this year's timetable actually uses.
+              final slots = _slotsUsedThisWeek(allSlots);
+              if (slots.isEmpty) {
+                return const Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Text(
+                      'No classes scheduled yet for this year. Add periods above to build the timetable.'),
                 );
-              },
-            ),
+              }
+
+              return _buildTimetableGrid(slots);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPreviewHeaderRow() {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withValues(alpha: .1),
+            borderRadius: BorderRadius.circular(AppRadius.xs),
+          ),
+          child: const Icon(Icons.view_agenda_rounded, color: AppColors.primary, size: 18),
+        ),
+        const SizedBox(width: 10),
+        Text('Year $_selectedYear Timetable', style: AppTextStyles.title),
+        const Spacer(),
+        _LegendDot(color: AppColors.primary, label: 'Theory'),
+        const SizedBox(width: 10),
+        _LegendDot(color: AppColors.teal, label: 'Lab'),
+      ],
+    );
+  }
+
+  Widget _buildTimetableGrid(List<TimeSlotModel> slots) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: AppColors.divider),
+        boxShadow: const [
+          BoxShadow(color: AppColors.shadow, blurRadius: 18, offset: Offset(0, 8)),
+        ],
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: DataTable(
+          columnSpacing: 14,
+          horizontalMargin: 12,
+          dividerThickness: 0.7,
+          headingRowColor: WidgetStateProperty.resolveWith(
+              (states) => AppColors.primary.withValues(alpha: 0.08)),
+          headingTextStyle: AppTextStyles.caption
+              .copyWith(fontWeight: FontWeight.w800, color: AppColors.primary),
+          dataTextStyle: AppTextStyles.caption.copyWith(height: 1.35),
+          dataRowMinHeight: 84,
+          dataRowMaxHeight: 110,
+          columns: [
+            const DataColumn(label: Text('Time slot')),
+            ...days.map((day) => DataColumn(label: Text(day))),
           ],
+          rows: slots.map((slot) => _buildTimetableRow(slot)).toList(),
         ),
       ),
+    );
+  }
+
+  DataRow _buildTimetableRow(TimeSlotModel slot) {
+    return DataRow(
+      cells: [
+        DataCell(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              '${_to12Hour(slot.startTime)}\n${_to12Hour(slot.endTime)}',
+              style: AppTextStyles.caption.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ),
+        ...days.map((day) {
+          final period = _getPeriodForDayAndSlot(day, slot);
+
+          if (period == null) {
+            return DataCell(_buildFreeSlotCell());
+          }
+
+          return DataCell(_buildPeriodCell(day, period));
+        }),
+      ],
+    );
+  }
+
+  Widget _buildFreeSlotCell() {
+    return Container(
+      width: 132,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      decoration: BoxDecoration(
+        color: AppColors.background,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Text(
+        'Free',
+        style: AppTextStyles.caption.copyWith(
+          color: AppColors.textSecondary.withValues(alpha: 0.6),
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  /// A single scheduled period card — tap opens the edit dialog,
+  /// long-press asks for confirmation and deletes it. Replaces the old
+  /// three-dot popup menu with direct, discoverable gestures. Styled with
+  /// a clearly-visible tinted fill (not just a faint wash) so it reads at
+  /// a glance, and a small pencil hint so the tap target is obvious.
+  Widget _buildPeriodCell(String day, PeriodModel period) {
+    final typeColor = _classTypeColor(period.classType);
+
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _showEditPeriodDialog(day, period),
+        onLongPress: () => _confirmDeletePeriod(day, period),
+        child: Container(
+          width: 132,
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                typeColor.withValues(alpha: 0.22),
+                typeColor.withValues(alpha: 0.08),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: typeColor.withValues(alpha: 0.45)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    period.classType == 'Lab'
+                        ? Icons.science_rounded
+                        : Icons.menu_book_rounded,
+                    size: 13,
+                    color: typeColor,
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      period.subject.isEmpty ? 'Free slot' : period.subject,
+                      style: AppTextStyles.caption
+                          .copyWith(fontWeight: FontWeight.w800, color: AppColors.textPrimary),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Icon(Icons.edit_rounded, size: 12, color: typeColor.withValues(alpha: 0.7)),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                period.batch.isEmpty
+                    ? period.classType
+                    : '${period.classType} • Batch ${period.batch}',
+                style: AppTextStyles.caption
+                    .copyWith(color: typeColor, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${period.facultyName.isEmpty ? 'Unassigned' : period.facultyName}\nRoom ${period.room.isEmpty ? '—' : period.room}',
+                style: AppTextStyles.caption.copyWith(color: AppColors.textSecondary),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Gradient pill selector used for the Year / Day filters — same visual
+/// recipe as the CR Directory's year selector (brandGradient when
+/// selected, subtle outlined chip otherwise).
+class _FilterPill extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _FilterPill({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppRadius.xxl),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+        decoration: BoxDecoration(
+          gradient: selected ? AppColors.brandGradient : null,
+          color: selected ? null : AppColors.surface,
+          borderRadius: BorderRadius.circular(AppRadius.xxl),
+          border: Border.all(
+            color: selected ? Colors.transparent : AppColors.divider,
+          ),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: AppColors.primary.withValues(alpha: 0.28),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4),
+                  ),
+                ]
+              : null,
+        ),
+        child: Text(
+          label,
+          style: AppTextStyles.caption.copyWith(
+            color: selected ? Colors.white : AppColors.textSecondary,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Small colored dot + label used for the Theory/Lab legend above the
+/// timetable grid.
+class _LegendDot extends StatelessWidget {
+  final Color color;
+  final String label;
+
+  const _LegendDot({required this.color, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 9,
+          height: 9,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 5),
+        Text(
+          label,
+          style: AppTextStyles.caption
+              .copyWith(color: AppColors.textSecondary, fontWeight: FontWeight.w600),
+        ),
+      ],
     );
   }
 }

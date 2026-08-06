@@ -21,6 +21,8 @@ enum EnrollmentFlowState {
 
   changingPose,
 
+  checkingDuplicate,
+
   uploading,
 
   completed,

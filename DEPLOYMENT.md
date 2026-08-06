@@ -1,8 +1,49 @@
 # AttendX — Deployment Guide
 
-The app ships as an APK downloaded from a free GitHub Pages website.
+Two things ship from the same free GitHub Pages site:
+
+| URL | What it is |
+|-----|------------|
+| `https://ganga2006.github.io/attendx/` | APK download page (`docs/`) |
+| `https://ganga2006.github.io/attendx/admin/` | Admin console (built from `lib/main_web.dart`) |
+
 Installed apps check Firestore at login and prompt users to update
 when a newer APK is published.
+
+## 0. Admin console on the web
+
+The console is built and published automatically by
+`.github/workflows/deploy-admin-web.yml` on every push to `main`.
+
+**One-time setup** — on GitHub: **Settings → Pages → Build and
+deployment → Source: GitHub Actions**. (This replaces the older
+"Deploy from a branch → /docs" setting; the workflow republishes
+`docs/` itself, so the download page stays exactly where it was.)
+
+Then, in the Firebase console: **Authentication → Settings → Authorized
+domains → Add domain → `ganga2006.github.io`**. Without this, sign-in on
+the console fails with `auth/unauthorized-domain`.
+
+After that, every push to `main` that touches `lib/`, `web/`, `docs/` or
+`pubspec.yaml` rebuilds and redeploys. Watch it under the **Actions**
+tab; a run takes about three minutes.
+
+### Why the console is a separate build
+
+`lib/main.dart` reaches TFLite, ML Kit, the camera and `dart:io` through
+the face-enrollment screens — none of which compile for the web.
+`lib/main_web.dart` starts from a root that only ever reaches the admin
+screens (plain Flutter + Firestore), so both targets build from one
+codebase without stubbing anything out.
+
+To run it locally:
+
+```
+flutter run -d chrome -t lib/main_web.dart
+```
+
+Students and CRs are refused at the login gate — the console is for the
+fixed admin account only.
 
 ## 1. One-time GitHub setup
 

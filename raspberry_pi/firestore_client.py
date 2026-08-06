@@ -13,6 +13,7 @@ import logging
 import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -26,6 +27,16 @@ log = logging.getLogger("firestore")
 
 _IST = ZoneInfo(config.TIMEZONE)
 
+# Firebase's OAuth token fetch can hang for MINUTES when fully offline —
+# the SDK's own timeouts don't cover it. Every Firestore call therefore
+# runs through this executor with a hard wall-clock timeout.
+_executor = ThreadPoolExecutor(max_workers=4)
+
+
+def call_with_timeout(fn, seconds: float):
+    """Run fn() but give up after `seconds` (raises TimeoutError)."""
+    return _executor.submit(fn).result(timeout=seconds)
+
 
 def init() -> firestore.client:
     if not firebase_admin._apps:  # idempotent — safe across restarts
@@ -37,6 +48,16 @@ def init() -> firestore.client:
 def local_date_str(dt: datetime | None = None) -> str:
     """yyyy-MM-dd in college local time (IST), zero-padded."""
     return (dt or datetime.now(_IST)).astimezone(_IST).strftime("%Y-%m-%d")
+
+
+def _parse_local_dt(date_str: str, time_str: str) -> datetime | None:
+    """Combine a 'yyyy-MM-dd' date and 'HH:mm' time into an IST datetime.
+    None if either string is missing/malformed."""
+    try:
+        naive = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
+        return naive.replace(tzinfo=_IST)
+    except Exception:
+        return None
 
 
 # --------------------------------------------------------------------------
@@ -145,7 +166,7 @@ class EnrollmentCache:
             while True:
                 time.sleep(config.CACHE_REFRESH_HOURS * 3600)
                 try:
-                    self.refresh()
+                    call_with_timeout(self.refresh, 60)
                 except Exception as exc:
                     log.warning("cache refresh failed: %s", exc)
 
@@ -166,9 +187,12 @@ class EventWriter:
         (checkout guard) or 'queued' (offline)."""
         now = datetime.now(timezone.utc)
         try:
-            return self._write(uid, reg_no, event_time=None, now=now)
+            return call_with_timeout(
+                lambda: self._write(uid, reg_no, event_time=None, now=now),
+                config.WRITE_TIMEOUT_SECONDS,
+            )
         except Exception as exc:
-            log.warning("write failed, queueing: %s", exc)
+            log.warning("write failed/timed out, queueing: %s", exc)
             self._enqueue(uid, reg_no, now)
             return "queued"
 
@@ -247,13 +271,88 @@ class EventWriter:
                 for item in items:
                     try:
                         when = datetime.fromisoformat(item["ts"])
-                        self._write(item["uid"], item["regNo"],
-                                    event_time=when,
-                                    now=datetime.now(timezone.utc))
+                        call_with_timeout(
+                            lambda: self._write(item["uid"], item["regNo"],
+                                                event_time=when,
+                                                now=datetime.now(timezone.utc)),
+                            15,
+                        )
                         log.info("replayed queued event for %s", item["uid"])
                     except Exception:
                         remaining.append(item)
                 with self.queue_lock:
                     self._save_queue(remaining)
+
+        threading.Thread(target=loop, daemon=True).start()
+
+
+# --------------------------------------------------------------------------
+# Timetable override cleanup
+# --------------------------------------------------------------------------
+
+class OverrideCleaner:
+    """Deletes `timetable_overrides` docs once the class they refer to has
+    ended. CRs create these (cancelled/postponed/room-changed) from the
+    app, but nothing ever removed them — this is the only always-on
+    Admin-SDK service in the whole system, so it's the natural place for
+    the cleanup to live rather than adding a separate backend.
+
+    A doc is expired if its own `date` is an earlier day than today (covers
+    any backlog from the Pi being off when a class ended), or its `date` is
+    today and `endTime` is already in the past.
+    """
+
+    def __init__(self, db) -> None:
+        self.db = db
+
+    def sweep(self) -> int:
+        today = local_date_str()
+        now = datetime.now(_IST)
+        deleted = 0
+
+        docs = self.db.collection(
+            config.TIMETABLE_OVERRIDES_COLLECTION
+        ).get(timeout=config.FIRESTORE_TIMEOUT)
+
+        for doc in docs:
+            data = doc.to_dict() or {}
+            date_str = str(data.get("date", ""))
+
+            expired = False
+            if date_str and date_str < today:
+                expired = True
+            elif date_str == today:
+                end_dt = _parse_local_dt(date_str, str(data.get("endTime", "")))
+                if end_dt is not None and now > end_dt:
+                    expired = True
+
+            if not expired:
+                continue
+
+            try:
+                doc.reference.delete(timeout=config.FIRESTORE_TIMEOUT)
+                deleted += 1
+            except Exception as exc:
+                log.warning("override cleanup: delete failed for %s: %s", doc.id, exc)
+
+        if deleted:
+            log.info("override cleanup: removed %d expired record(s)", deleted)
+        return deleted
+
+    def start_auto_sweep(self) -> None:
+        # One immediate pass covers any backlog from downtime, then settle
+        # into the regular interval.
+        try:
+            call_with_timeout(self.sweep, 30)
+        except Exception as exc:
+            log.warning("override cleanup: initial sweep failed: %s", exc)
+
+        def loop() -> None:
+            while True:
+                time.sleep(config.OVERRIDE_CLEANUP_SECONDS)
+                try:
+                    call_with_timeout(self.sweep, 30)
+                except Exception as exc:
+                    log.warning("override cleanup: sweep failed: %s", exc)
 
         threading.Thread(target=loop, daemon=True).start()

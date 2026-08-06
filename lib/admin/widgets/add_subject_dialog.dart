@@ -3,7 +3,12 @@ import '../models/subject_model.dart';
 import '../services/master_data_service.dart';
 
 class AddSubjectDialog extends StatefulWidget {
-  const AddSubjectDialog({super.key});
+  /// Pre-selects the year (e.g. when opened from the Timetable screen
+  /// for a specific year's Add Period form) instead of always defaulting
+  /// to Year 1.
+  final int? initialYear;
+
+  const AddSubjectDialog({super.key, this.initialYear});
 
   @override
   State<AddSubjectDialog> createState() => _AddSubjectDialogState();
@@ -13,8 +18,8 @@ class _AddSubjectDialogState extends State<AddSubjectDialog> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _codeController = TextEditingController();
-  
-  int _selectedYear = 1;
+
+  late int _selectedYear = widget.initialYear ?? 1;
   String _selectedSemester = "Odd";
 
   @override

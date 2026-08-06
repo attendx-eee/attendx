@@ -386,8 +386,12 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
         return;
       }
 
-      final rawEmbedding = faceEmbeddingService.generateEmbedding(croppedFace);
-      final currentEmbedding = faceEmbeddingService.normalizeEmbedding(rawEmbedding);
+      // Same flip test-time-augmentation used at enrollment (see
+      // FaceEmbeddingService.generateEmbeddingTTA) — keeping live-capture
+      // embeddings built the same way as the stored templates they're
+      // compared against gives the most consistent scores.
+      final currentEmbedding =
+          faceEmbeddingService.generateEmbeddingTTA(croppedFace);
 
       if (currentEmbedding.isEmpty) throw Exception("Mapping error.");
 

@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_radius.dart';
 import '../models/lab_model.dart';
 import '../services/master_data_service.dart';
 import '../widgets/add_lab_dialog.dart';
 import '../widgets/confirm_and_delete.dart';
 import '../widgets/edit_lab_dialog.dart';
+import '../widgets/management_icon_avatar.dart';
 
 class LabScreen extends StatefulWidget {
   const LabScreen({super.key});
@@ -74,15 +77,23 @@ class _LabScreenState extends State<LabScreen> {
                 }
 
                 return ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 15),
+                  // Bottom padding clears the extended FAB — otherwise the
+                  // last card ends up hidden behind it once the list is
+                  // long enough to scroll.
+                  padding: const EdgeInsets.fromLTRB(15, 8, 15, 100),
                   itemCount: labs.length,
                   itemBuilder: (context, index) {
                     final lab = labs[index];
                     return Card(
+                      elevation: 1,
                       margin: const EdgeInsets.symmetric(vertical: 8),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppRadius.lg),
+                      ),
                       child: ListTile(
-                        leading: CircleAvatar(
-                          child: Text(lab.code),
+                        leading: const ManagementIconAvatar(
+                          icon: Icons.science_rounded,
+                          color: AppColors.primary,
                         ),
                         title: Text(lab.name),
                         subtitle: Text("Code: ${lab.code} | Sem: ${lab.semester}"),

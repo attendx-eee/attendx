@@ -67,6 +67,33 @@ class FaceEmbeddingService {
     return List<double>.from(output[0]);
   }
 
+  /// Flip test-time-augmentation: runs inference on [croppedFace] AND its
+  /// horizontal mirror, then averages the two raw embeddings before
+  /// normalizing. This is a standard face-verification accuracy technique
+  /// (used in FaceNet/ArcFace/InsightFace deployments) — averaging a face
+  /// with its mirror cancels out small left/right lighting and angle
+  /// asymmetries that a single frame bakes into the embedding, producing a
+  /// more stable, canonical vector. Same identity ends up scoring higher
+  /// (closer to 1.0) against itself; a different person's score barely
+  /// moves — so it tightens genuine-match confidence without raising
+  /// false-accept risk. Costs one extra inference (MobileFaceNet is tiny,
+  /// so this is still fast on-device).
+  List<double> generateEmbeddingTTA(img.Image croppedFace) {
+    final original = generateEmbedding(croppedFace);
+    final flipped = generateEmbedding(img.flipHorizontal(croppedFace));
+
+    if (original.length != flipped.length || original.isEmpty) {
+      return normalizeEmbedding(original);
+    }
+
+    final averaged = List<double>.generate(
+      original.length,
+      (i) => (original[i] + flipped[i]) / 2,
+    );
+
+    return normalizeEmbedding(averaged);
+  }
+
   List<double> normalizeEmbedding(List<double> embedding) {
     double sum = 0;
 

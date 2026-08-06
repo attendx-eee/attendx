@@ -22,6 +22,7 @@ PHRASES = {
     "initializing": "Initializing. Searching for network.",
     "net_ok": "Internet connection successful.",
     "net_fail": "No internet. Please check the hotspot. Running in offline mode.",
+    "net_lost": "Internet disconnected. Attendance will be saved and synced automatically.",
     "look_at_camera": "Please look straight at the camera.",
     "full_face": "Bring your full face into the frame.",
     "too_dark": "Too dark. Please move to better lighting.",
@@ -83,9 +84,51 @@ def set_max_volume() -> None:
         log.warning("could not set volume: %s", exc)
 
 
+def _synth_wav(text: str) -> str:
+    """Text -> WAV path. Piper (neural, near-human) with a disk cache so
+    each unique phrase is synthesized only once; espeak-ng as last resort."""
+    import hashlib
+
+    config.TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = config.TTS_CACHE_DIR / (
+        hashlib.md5(text.encode()).hexdigest() + ".wav")
+    if path.exists():
+        return str(path)
+
+    piper = config.BASE_DIR / "venv" / "bin" / "piper"
+    if piper.exists():
+        try:
+            subprocess.run(
+                [str(piper), "-m", config.PIPER_VOICE,
+                 "--data-dir", str(config.VOICES_DIR),
+                 "--download-dir", str(config.VOICES_DIR),
+                 "-f", str(path)],
+                input=text.encode(),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=30,
+            )
+            if path.exists():
+                return str(path)
+        except Exception as exc:
+            log.warning("piper synth failed: %s", exc)
+
+    try:  # fallback: espeak-ng (robotic but always available)
+        subprocess.run(
+            ["espeak-ng", "-v", config.ESPEAK_VOICE, "-s", config.ESPEAK_SPEED,
+             "-a", config.ESPEAK_AMPLITUDE, "-w", str(path), text],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+        )
+    except Exception as exc:
+        log.warning("espeak synth failed: %s", exc)
+    return str(path)
+
+
 def _espeak_cmd(text: str) -> list[str]:
-    return ["espeak-ng", "-v", config.ESPEAK_VOICE, "-s", config.ESPEAK_SPEED,
-            "-a", config.ESPEAK_AMPLITUDE, text]
+    return _aplay_cmd(_synth_wav(text))
+
+
+def _aplay_cmd(path: str) -> list[str]:
+    return ["aplay", "-q", "-D", config.AUDIO_DEVICE, path]
 
 
 def say(key: str, block: bool = False, force: bool = False) -> None:
@@ -99,7 +142,7 @@ def say(key: str, block: bool = False, force: bool = False) -> None:
 
     wav = config.PROMPTS_DIR / f"{key}.wav"
     if wav.exists():
-        cmd = ["aplay", "-q", str(wav)]
+        cmd = _aplay_cmd(str(wav))
     elif key in PHRASES:
         cmd = _espeak_cmd(PHRASES[key])
     else:

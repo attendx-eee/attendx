@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:custom_refresh_indicator/custom_refresh_indicator.dart';
 import '../../services/auth_service.dart';
 import '../../services/attendance_service.dart';
 import '../../services/firestore_service.dart';
@@ -12,14 +13,17 @@ import '../full_timetable_screen.dart';
 import '../../core/responsive/responsive.dart';
 import '../../core/theme/app_spacing.dart';
 import 'widgets/hero_welcome_card.dart';
+import 'widgets/branded_refresh_indicator.dart';
 import 'widgets/dashboard_appbar.dart';
 import 'widgets/attendance_alert_card.dart';
-import 'widgets/attendance_stats_section.dart';
-import 'widgets/attendance_overview_card.dart';
 import 'widgets/today_attendance_card.dart';
 import 'widgets/today_schedule_card.dart';
 import 'widgets/notifications_preview_card.dart';
 import 'widgets/quick_actions_grid.dart';
+import 'widgets/fade_slide_in.dart';
+import '../../admin/widgets/master_tile.dart';
+import '../../core/widgets/primary_card.dart';
+import '../../core/theme/app_text_styles.dart';
 import '../attendance/attendance_screen.dart';
 import '../../notifications/notification_screen.dart';
 import '../../notifications/services/notification_service.dart';
@@ -31,6 +35,8 @@ import '../../core/constants/app_config.dart';
 import '../../more/account_settings_screen.dart';
 import '../../services/update_service.dart';
 import '../../cr/cr_timetable_screen.dart';
+import '../../attendance/models/attendance_marker.dart';
+import '../../attendance/screens/student_directory_screen.dart';
 import '../../timetable/models/timetable_override_model.dart';
 import '../../timetable/services/timetable_override_service.dart';
 import '../../core/theme/app_colors.dart';
@@ -47,7 +53,6 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   final AuthService authService = AuthService();
   final FirestoreService firestoreService = FirestoreService();
-  final PageController _pageController = PageController(initialPage: 0);
   final FirebaseAuth auth = FirebaseAuth.instance;
   List<QueryDocumentSnapshot<Map<String, dynamic>>> notifications = [];
   final NotificationService notificationService = NotificationService.instance;
@@ -57,7 +62,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   bool isLoading = true;
   bool _enrollPromptShown = false;
-  int _selectedMonthIndex = 0;
 
   /// 0 = today, 1 = next college day (swipe left/right to switch).
   int _scheduleDayIndex = 0;
@@ -92,7 +96,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
-    _pageController.dispose();
     super.dispose();
   }
 
@@ -478,14 +481,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final bool isCR = role == 'cr';
     final bool isAdmin = role == 'hod' || role == 'office';
 
+    // Only the headline percentage is needed here now — the present /
+    // absent / total split it comes from is shown once, on the
+    // Attendance page.
     final totalPresent = attendanceStats.values.fold(
       0,
       (acc, item) => acc + item["present"]!,
-    );
-
-    final totalAbsent = attendanceStats.values.fold(
-      0,
-      (acc, item) => acc + item["absent"]!,
     );
 
     final totalClasses = attendanceStats.values.fold(
@@ -497,7 +498,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         totalClasses == 0 ? 0.0 : (totalPresent / totalClasses) * 100;
 
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: AppColors.background,
       appBar: DashboardAppBar(
         student: data,
         onProfileTap: () {
@@ -532,7 +533,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           }
         },
       ),
-      body: SingleChildScrollView(
+      body: CustomMaterialIndicator(
+        onRefresh: loadStudent,
+        backgroundColor: Colors.white,
+        indicatorBuilder: (context, controller) =>
+            BrandedRefreshIndicator(controller: controller),
+        child: SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: Responsive.all(AppSpacing.md),
         child: Column(
@@ -540,18 +546,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           children: [
             // Role-gated tools: Master Data for admins, timetable tools for CRs.
             if (isAdmin) ...[
-              Card(
-                elevation: 2,
-                child: ListTile(
-                  leading: const Icon(Icons.admin_panel_settings,
-                      color: AppColors.primary),
-                  title: const Text(
-                    "Master Data Management",
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  subtitle:
-                      const Text("Manage faculty, subjects, rooms & more"),
-                  trailing: const Icon(Icons.arrow_forward_ios),
+              FadeSlideIn(
+                child: MasterTile(
+                  icon: Icons.admin_panel_settings_rounded,
+                  title: "Master Data Management",
+                  subtitle: "Manage faculty, subjects, rooms & more",
+                  color: AppColors.primary,
                   onTap: () {
                     Navigator.push(
                       context,
@@ -562,44 +562,63 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   },
                 ),
               ),
-              SizedBox(height: Responsive.h(20)),
+              SizedBox(height: Responsive.h(6)),
             ],
 
             if (!isCR && data['crStatus'] == 'pending') ...[
-              Card(
-                elevation: 0,
-                color: Colors.orange.shade50,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  side: BorderSide(color: Colors.orange.shade200),
-                ),
-                child: const ListTile(
-                  leading: Icon(Icons.hourglass_top_rounded,
-                      color: Colors.orange),
-                  title: Text(
-                    "CR request pending",
-                    style: TextStyle(fontWeight: FontWeight.bold),
+              FadeSlideIn(
+                child: PrimaryCard(
+                  color: const Color(0xFFFFF8E9),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: Responsive.w(46),
+                        height: Responsive.w(46),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFFEF0C7),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.hourglass_top_rounded,
+                          color: AppColors.warning,
+                          size: Responsive.sp(22),
+                        ),
+                      ),
+                      SizedBox(width: Responsive.w(16)),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              "CR Request Pending",
+                              style: AppTextStyles.title
+                                  .copyWith(color: AppColors.warning),
+                            ),
+                            SizedBox(height: Responsive.h(6)),
+                            Text(
+                              "Waiting for admin approval. You'll be notified once decided.",
+                              style: AppTextStyles.body
+                                  .copyWith(color: Colors.black87),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  subtitle: Text(
-                      "Waiting for admin approval. You'll be notified once decided."),
                 ),
               ),
               SizedBox(height: Responsive.h(20)),
             ],
 
             if (isCR) ...[
-              Card(
-                elevation: 2,
-                child: ListTile(
-                  leading: const Icon(Icons.edit_calendar_rounded,
-                      color: AppColors.primary),
-                  title: const Text(
-                    "CR Timetable Tools",
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  subtitle: const Text(
-                      "Cancel, replace or move classes — notifies your year instantly"),
-                  trailing: const Icon(Icons.arrow_forward_ios),
+              FadeSlideIn(
+                child: MasterTile(
+                  icon: Icons.edit_calendar_rounded,
+                  title: "CR Timetable Tools",
+                  subtitle:
+                      "Cancel, replace or move classes — notifies your year instantly",
+                  color: AppColors.teal,
                   onTap: () {
                     Navigator.push(
                       context,
@@ -610,97 +629,128 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   },
                 ),
               ),
-              SizedBox(height: Responsive.h(20)),
+              // Opens for browsing straight away; the marking buttons stay
+              // locked until the admin approves the month, and the screen
+              // itself is where the CR raises that request.
+              FadeSlideIn(
+                delay: const Duration(milliseconds: 30),
+                child: MasterTile(
+                  icon: Icons.fact_check_outlined,
+                  title: "Class Attendance",
+                  subtitle:
+                      "View your year's students — mark attendance once approved",
+                  color: AppColors.teal,
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => StudentDirectoryScreen(
+                          marker: AttendanceMarker.cr(
+                            uid: studentData!.id,
+                            name: (data['name'] ?? 'CR').toString(),
+                            year: AppConfig.yearOf(data),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              SizedBox(height: Responsive.h(6)),
             ],
 
-            AttendanceAlertCard(
-              attendancePercentage: attendancePercentage,
+            FadeSlideIn(
+              delay: const Duration(milliseconds: 60),
+              child: AttendanceAlertCard(
+                attendancePercentage: attendancePercentage,
+              ),
             ),
             SizedBox(height: Responsive.h(20)),
-            HeroWelcomeCard(
-              student: data,
+            FadeSlideIn(
+              delay: const Duration(milliseconds: 100),
+              child: HeroWelcomeCard(
+                student: data,
+              ),
             ),
             SizedBox(height: Responsive.h(24)),
 
-            NotificationsPreviewCard(
-              notifications: notifications,
-              onViewAll: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const NotificationScreen(),
-                  ),
-                );
-              },
+            FadeSlideIn(
+              delay: const Duration(milliseconds: 140),
+              child: NotificationsPreviewCard(
+                notifications: notifications,
+                onViewAll: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const NotificationScreen(),
+                    ),
+                  );
+                },
+              ),
             ),
             const SizedBox(height: 20),
 
-            AttendanceStatsSection(
-              present: totalPresent,
-              absent: totalAbsent,
-              total: totalClasses,
-            ),
-            SizedBox(height: Responsive.h(24)),
-            const SizedBox(height: 32),
-
-            AttendanceOverviewCard(
-              months: semesterMonths,
-              selectedIndex: _selectedMonthIndex,
-              pageController: _pageController,
-              attendance: attendanceStats,
-              onMonthChanged: (index) {
-                setState(() {
-                  _selectedMonthIndex = index;
-                });
-              },
+            // The semester present/absent/total breakdown used to sit
+            // here as well as on the Attendance page. It belongs there:
+            // that screen can show it beside the calendar, subject split
+            // and history that explain the numbers, whereas here it was
+            // a second copy of figures the alert card above already
+            // summarises. The dashboard's job is "today"; the Attendance
+            // page's job is "the semester".
+            FadeSlideIn(
+              delay: const Duration(milliseconds: 180),
+              child: TodayAttendanceCard(
+                attendanceDoc: todayAttendance,
+              ),
             ),
 
             SizedBox(height: Responsive.h(24)),
 
-            TodayAttendanceCard(
-              attendanceDoc: todayAttendance,
+            FadeSlideIn(
+              delay: const Duration(milliseconds: 220),
+              child: _buildSchedulePager(data),
             ),
 
             SizedBox(height: Responsive.h(24)),
 
-            _buildSchedulePager(data),
-
-            SizedBox(height: Responsive.h(24)),
-
-            QuickActionsGrid(
-              onAttendance: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const AttendanceScreen(),
-                  ),
-                );
-              },
-              onSettings: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => AccountSettingsScreen(student: data),
-                  ),
-                );
-              },
-              onLeave: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text("coming soon!"),
-                      backgroundColor: Colors.orangeAccent),
-                );
-              },
-              onReports: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                      content: Text("coming soon!"),
-                      backgroundColor: Colors.orangeAccent),
-                );
-              },
+            FadeSlideIn(
+              delay: const Duration(milliseconds: 260),
+              child: QuickActionsGrid(
+                onAttendance: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const AttendanceScreen(),
+                    ),
+                  );
+                },
+                onSettings: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => AccountSettingsScreen(student: data),
+                    ),
+                  );
+                },
+                onLeave: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text("coming soon!"),
+                        backgroundColor: Colors.orangeAccent),
+                  );
+                },
+                onReports: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text("coming soon!"),
+                        backgroundColor: Colors.orangeAccent),
+                  );
+                },
+              ),
             ),
           ],
         ),
+      ),
       ),
     );
   }

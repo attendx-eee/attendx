@@ -1,12 +1,18 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
+import '../../attendance/services/manual_attendance_service.dart';
 import '../../core/constants/app_config.dart';
 import '../../services/attendance_service.dart';
 
 /// Admin-only attendance insights fed by Raspberry Pi check-in events:
 /// today's check-in/late/absent summary, a 7-day late-check-in count
-/// graph, and the list of today's late students.
+/// graph, and the list of late/marked-absent students across the week
+/// (exportable as a PDF).
 class AttendanceInsightsScreen extends StatefulWidget {
   const AttendanceInsightsScreen({super.key});
 
@@ -39,11 +45,35 @@ class _DayInsight {
   _DayInsight(this.date);
 }
 
+/// One row in the weekly late-arrivals report: either "late" (checked in
+/// between the present and late cutoffs, still counts as present) or
+/// "marked absent" (checked in after the late cutoff — arrived, but too
+/// late to count).
+class _WeeklyLateEntry {
+  final DateTime date;
+  final String name;
+  final String regNo;
+  final int year;
+  final DateTime checkIn;
+  final bool markedAbsent;
+
+  const _WeeklyLateEntry({
+    required this.date,
+    required this.name,
+    required this.regNo,
+    required this.year,
+    required this.checkIn,
+    required this.markedAbsent,
+  });
+}
+
 class _AttendanceInsightsScreenState extends State<AttendanceInsightsScreen> {
   bool _loading = true;
+  bool _exportingPdf = false;
   int _totalStudents = 0;
   List<_DayInsight> _week = [];
   List<_LateStudent> _lateToday = [];
+  List<_WeeklyLateEntry> _weeklyLate = [];
 
   @override
   void initState() {
@@ -77,13 +107,20 @@ class _AttendanceInsightsScreenState extends State<AttendanceInsightsScreen> {
 
       final week = <_DayInsight>[];
       final lateToday = <_LateStudent>[];
+      final weeklyLate = <_WeeklyLateEntry>[];
 
       for (final date in days) {
         final insight = _DayInsight(date);
         final weekday = AppConfig.dayName(date);
 
-        final events =
-            await AttendanceService.instance.eventsOn(AppConfig.dateId(date));
+        final dateId = AppConfig.dateId(date);
+        final events = await AttendanceService.instance.eventsOn(dateId);
+
+        // This report is deliberately built from check-in events — it's
+        // about who walked through the door and when. Manual marks are
+        // still applied on top, so a student staff already excused isn't
+        // listed as a late arrival for the rest of the week.
+        final manual = await ManualAttendanceService.instance.onDate(dateId);
 
         for (final event in events) {
           final uid = (event['uid'] ?? '').toString();
@@ -104,24 +141,54 @@ class _AttendanceInsightsScreenState extends State<AttendanceInsightsScreen> {
             date: date,
             periods: periods,
             checkIn: checkIn,
+            manual: manual[uid],
           );
 
-          if (verdict == null || !verdict.present) continue;
+          if (verdict == null) continue; // not a college day
 
-          insight.checkIns++;
-          if (verdict.late) {
-            insight.late++;
+          final name = (student['name'] ?? 'Unknown').toString();
+          final regNo = (student['regNo'] ?? '--').toString();
+          final inTime = checkIn.toDate();
 
-            final isToday = AppConfig.dateId(date) == AppConfig.dateId(today);
-            if (isToday) {
-              lateToday.add(_LateStudent(
-                name: (student['name'] ?? 'Unknown').toString(),
-                regNo: (student['regNo'] ?? '--').toString(),
+          if (verdict.present) {
+            insight.checkIns++;
+            if (verdict.late) {
+              insight.late++;
+
+              // Present, but after the 9:15 AM cutoff.
+              weeklyLate.add(_WeeklyLateEntry(
+                date: date,
+                name: name,
+                regNo: regNo,
                 year: year,
-                checkIn: checkIn.toDate(),
-                lateByMinutes: verdict.lateByMinutes,
+                checkIn: inTime,
+                markedAbsent: false,
               ));
+
+              final isToday =
+                  AppConfig.dateId(date) == AppConfig.dateId(today);
+              if (isToday) {
+                lateToday.add(_LateStudent(
+                  name: name,
+                  regNo: regNo,
+                  year: year,
+                  checkIn: inTime,
+                  lateByMinutes: verdict.lateByMinutes,
+                ));
+              }
             }
+          } else {
+            // Checked in, but after the 9:30 AM cutoff — still surfaced so
+            // admins can see who actually showed up, just too late to
+            // count as present.
+            weeklyLate.add(_WeeklyLateEntry(
+              date: date,
+              name: name,
+              regNo: regNo,
+              year: year,
+              checkIn: inTime,
+              markedAbsent: true,
+            ));
           }
         }
 
@@ -129,11 +196,16 @@ class _AttendanceInsightsScreenState extends State<AttendanceInsightsScreen> {
       }
 
       lateToday.sort((a, b) => b.lateByMinutes.compareTo(a.lateByMinutes));
+      weeklyLate.sort((a, b) {
+        final byDate = b.date.compareTo(a.date); // most recent day first
+        return byDate != 0 ? byDate : a.checkIn.compareTo(b.checkIn);
+      });
 
       if (mounted) {
         setState(() {
           _week = week;
           _lateToday = lateToday;
+          _weeklyLate = weeklyLate;
           _loading = false;
         });
       }
@@ -147,6 +219,101 @@ class _AttendanceInsightsScreenState extends State<AttendanceInsightsScreen> {
     final h = d.hour > 12 ? d.hour - 12 : (d.hour == 0 ? 12 : d.hour);
     final ap = d.hour >= 12 ? 'PM' : 'AM';
     return '$h:${d.minute.toString().padLeft(2, '0')} $ap';
+  }
+
+  /// Builds a PDF of this week's late/marked-absent arrivals and opens
+  /// the native share sheet so the admin can save or send it.
+  Future<void> _exportWeeklyPdf() async {
+    if (_weeklyLate.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("No late arrivals to export this week")),
+      );
+      return;
+    }
+
+    setState(() => _exportingPdf = true);
+    try {
+      final rows = _weeklyLate
+          .map((s) => [
+                DateFormat('dd MMM (EEE)').format(s.date),
+                s.name,
+                s.regNo,
+                'Y${s.year}',
+                _fmtTime(s.checkIn),
+                s.markedAbsent
+                    ? 'Absent (after ${AppConfig.lateCutoffLabel})'
+                    : 'Late',
+              ])
+          .toList();
+
+      final doc = pw.Document();
+      doc.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(28),
+          header: (context) => pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text(
+                'AttendX — Weekly Late Arrivals Report',
+                style:
+                    pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
+              ),
+              pw.SizedBox(height: 4),
+              pw.Text(
+                'Department: ${AppConfig.department}   |   Generated: '
+                '${DateFormat('dd MMM yyyy, hh:mm a').format(DateTime.now())}',
+                style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
+              ),
+              pw.SizedBox(height: 2),
+              pw.Text(
+                'Present up to ${AppConfig.presentCutoffLabel}  |  Late '
+                '${AppConfig.presentCutoffLabel}-${AppConfig.lateCutoffLabel}  |  '
+                'Absent after ${AppConfig.lateCutoffLabel}',
+                style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
+              ),
+              pw.SizedBox(height: 14),
+            ],
+          ),
+          build: (context) => [
+            pw.TableHelper.fromTextArray(
+              headers: const ['Date', 'Name', 'Reg No', 'Year', 'Check-in', 'Status'],
+              data: rows,
+              headerStyle: pw.TextStyle(
+                fontWeight: pw.FontWeight.bold,
+                fontSize: 10,
+                color: PdfColors.white,
+              ),
+              headerDecoration: const pw.BoxDecoration(color: PdfColors.deepOrange),
+              cellStyle: const pw.TextStyle(fontSize: 9.5),
+              cellAlignment: pw.Alignment.centerLeft,
+              rowDecoration: const pw.BoxDecoration(
+                border: pw.Border(
+                    bottom: pw.BorderSide(color: PdfColors.grey300, width: .5)),
+              ),
+              cellPadding:
+                  const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+            ),
+          ],
+        ),
+      );
+
+      final bytes = await doc.save();
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename:
+            'weekly_late_report_${DateFormat('yyyyMMdd').format(DateTime.now())}.pdf',
+      );
+    } catch (e) {
+      debugPrint('PDF export failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Couldn't generate the PDF report")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _exportingPdf = false);
+    }
   }
 
   @override
@@ -196,7 +363,7 @@ class _AttendanceInsightsScreenState extends State<AttendanceInsightsScreen> {
                       theme,
                       label: "Late Today",
                       value: "${todayInsight?.late ?? 0}",
-                      sub: "> ${AppConfig.onTimeGraceMinutes} min after start",
+                      sub: "after ${AppConfig.presentCutoffLabel}",
                       color: Colors.orange,
                       icon: Icons.schedule_rounded,
                     ),
@@ -219,7 +386,7 @@ class _AttendanceInsightsScreenState extends State<AttendanceInsightsScreen> {
                                 ?.copyWith(fontWeight: FontWeight.bold)),
                         const SizedBox(height: 4),
                         Text(
-                          "Students arriving ${AppConfig.onTimeGraceMinutes}-${AppConfig.presentGraceMinutes}+ min after their first period",
+                          "Students arriving after ${AppConfig.presentCutoffLabel}",
                           style: theme.textTheme.bodySmall
                               ?.copyWith(color: Colors.grey),
                         ),
@@ -274,6 +441,110 @@ class _AttendanceInsightsScreenState extends State<AttendanceInsightsScreen> {
                             Text("+${s.lateByMinutes} min",
                                 style: const TextStyle(
                                     fontSize: 12, color: Colors.orange)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 24),
+
+                // ---------------------------- weekly late/absent report
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text("Late arrivals this week",
+                          style: theme.textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.bold)),
+                    ),
+                    FilledButton.icon(
+                      onPressed: _exportingPdf ? null : _exportWeeklyPdf,
+                      icon: _exportingPdf
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.picture_as_pdf_rounded, size: 18),
+                      label: Text(_exportingPdf ? "Preparing…" : "Download PDF"),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.deepOrange,
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 14),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  "Present up to ${AppConfig.presentCutoffLabel}  •  Late up to "
+                  "${AppConfig.lateCutoffLabel}  •  Absent after ${AppConfig.lateCutoffLabel}",
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: Colors.grey),
+                ),
+                const SizedBox(height: 10),
+                if (_weeklyLate.isEmpty)
+                  const Card(
+                    elevation: 0,
+                    child: Padding(
+                      padding: EdgeInsets.all(20),
+                      child: Center(
+                          child: Text("No late arrivals in the last 7 college days")),
+                    ),
+                  )
+                else
+                  ..._weeklyLate.map(
+                    (s) => Card(
+                      elevation: 0,
+                      margin: const EdgeInsets.only(bottom: 8),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      child: ListTile(
+                        leading: CircleAvatar(
+                          backgroundColor: s.markedAbsent
+                              ? Colors.red.shade50
+                              : Colors.orange.shade100,
+                          child: Text("Y${s.year}",
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  color: s.markedAbsent
+                                      ? Colors.red
+                                      : Colors.orange)),
+                        ),
+                        title: Text(s.name,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: Text(
+                            "Reg ${s.regNo}  •  ${DateFormat('dd MMM (EEE)').format(s.date)}"),
+                        trailing: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(_fmtTime(s.checkIn),
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700)),
+                            Container(
+                              margin: const EdgeInsets.only(top: 2),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: s.markedAbsent
+                                    ? Colors.red.shade50
+                                    : Colors.orange.shade50,
+                                borderRadius: BorderRadius.circular(100),
+                              ),
+                              child: Text(
+                                s.markedAbsent ? "Absent" : "Late",
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: s.markedAbsent
+                                      ? Colors.red
+                                      : Colors.orange,
+                                ),
+                              ),
+                            ),
                           ],
                         ),
                       ),

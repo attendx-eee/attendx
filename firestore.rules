@@ -51,7 +51,8 @@ service cloud.firestore {
     match /students/{uid} {
       allow read: if signedIn();
       allow create, update: if isSelf(uid) || isAdmin();
-      allow delete: if isAdmin();
+      // Self-delete needed for the in-app "Delete Account" flow.
+      allow delete: if isSelf(uid) || isAdmin();
     }
 
     // ---------- face templates ----------
@@ -63,7 +64,13 @@ service cloud.firestore {
     }
 
     // ---------- attendance events (written ONLY by the Pi's Admin SDK) ----------
-    // Students read their own; admins read all; NO client writes ever.
+    // Students read their own; admins read all. Creates/edits are NEVER
+    // allowed from a client (only the Pi's Admin SDK, which bypasses
+    // these rules) — that keeps attendance history tamper-proof day to
+    // day. Delete is the one exception, scoped to a student erasing
+    // their OWN events, and exists solely to support the in-app "Delete
+    // Account" flow (which also deletes the student's profile/face data
+    // in the same action) — not a way to selectively edit attendance.
     match /attendance_events/{eventId} {
       // resource == null: reading a not-yet-created day doc (e.g. today's
       // attendance before first check-in) must return empty, not error.
@@ -71,7 +78,60 @@ service cloud.firestore {
                   && (resource == null
                       || resource.data.uid == request.auth.uid
                       || isAdmin());
-      allow write: if false;
+      allow create, update: if false;
+      allow delete: if signedIn()
+                    && (resource.data.uid == request.auth.uid || isAdmin());
+    }
+
+    // ---------- manual attendance corrections ----------
+    // The layer that lets a human fix what the scanner got wrong, without
+    // ever touching the Pi's own record above. Anyone signed in can read
+    // (a student needs to see their own corrected days, and the merge
+    // happens client-side), but writing is limited to admins and to CRs
+    // holding an approved grant for that day's month — checked here, not
+    // just in the UI, so a CR can't write straight to the collection
+    // after their month lapses.
+    //
+    // Each doc carries its own `month` (yyyy-MM) field, which is exactly
+    // the key its permission doc is filed under.
+    function crMayMark(month) {
+      return isCr()
+        && exists(/databases/$(database)/documents/cr_attendance_permissions/$(request.auth.uid + '_' + month))
+        && get(/databases/$(database)/documents/cr_attendance_permissions/$(request.auth.uid + '_' + month)).data.status == 'approved';
+    }
+
+    match /attendance_manual/{id} {
+      allow read: if signedIn();
+
+      // The month must agree with the date it claims to cover, otherwise
+      // a CR approved for one month could file marks against another.
+      allow create, update: if isAdmin()
+        || (request.resource.data.markedBy == request.auth.uid
+            && request.resource.data.month == request.resource.data.date[0:7]
+            && crMayMark(request.resource.data.month));
+
+      allow delete: if isAdmin() || crMayMark(resource.data.month);
+    }
+
+    // ---------- CR attendance-marking permissions ----------
+    // A CR raises their own pending request and can read the queue; only
+    // an admin decides. The status guard on create/update is what stops a
+    // CR from writing themselves an 'approved' doc and unlocking the
+    // rules above on their own.
+    match /cr_attendance_permissions/{id} {
+      allow read: if signedIn();
+
+      allow create: if isAdmin()
+        || (isCr()
+            && request.resource.data.crUid == request.auth.uid
+            && request.resource.data.status == 'pending');
+
+      allow update: if isAdmin()
+        || (isCr()
+            && resource.data.crUid == request.auth.uid
+            && request.resource.data.status == 'pending');
+
+      allow delete: if isAdmin();
     }
 
     // ---------- notifications ----------

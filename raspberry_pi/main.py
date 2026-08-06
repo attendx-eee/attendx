@@ -62,6 +62,30 @@ class Camera:
         ok, frame = self.cap.read()
         return frame if ok else None
 
+    def stop(self) -> None:
+        """Pause streaming (PIR idle mode) — keeps the camera configured."""
+        try:
+            if self.picam is not None:
+                self.picam.stop()
+            elif self.cap is not None:
+                self.cap.release()
+                self.cap = None
+        except Exception as exc:
+            log.warning("camera stop failed: %s", exc)
+
+    def start(self) -> None:
+        """Resume streaming after motion."""
+        try:
+            if self.picam is not None:
+                self.picam.start()
+                time.sleep(0.7)  # brief AE settle
+            elif self.cap is None:
+                self.cap = cv2.VideoCapture(0)
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_SIZE[0])
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_SIZE[1])
+        except Exception as exc:
+            log.warning("camera start failed: %s", exc)
+
 
 # --------------------------------------------------------------------------
 # Guidance + quality gates: the same idea as enrollment — only a full,
@@ -116,41 +140,65 @@ def guide(face, score: float, frame) -> str:
 # Main loop
 # --------------------------------------------------------------------------
 
-def connect_network(cache) -> bool:
-    """Startup network sequence, narrated over the speaker.
-    Falls back to the on-disk enrollment cache and keeps retrying in the
-    background — the kiosk always comes up, with or without the hotspot."""
+def _net_online(timeout: float = 2.0) -> bool:
+    """Instant connectivity probe — a raw socket, no Firebase involved."""
+    import socket
+
+    for host in ("8.8.8.8", "1.1.1.1"):
+        try:
+            socket.create_connection((host, 53), timeout).close()
+            return True
+        except OSError:
+            continue
+    return False
+
+
+def connect_network(cache) -> None:
+    """Startup: instant probe, honest voice status, then a permanent
+    monitor that announces disconnect/reconnect the moment they happen."""
     voice.set_max_volume()
     voice.say("initializing", block=True, force=True)
-    for attempt in range(1, config.NET_STARTUP_ATTEMPTS + 1):
+
+    online = _net_online()
+    if online:
         try:
-            cache.refresh()  # also persists to disk for next offline boot
+            firestore_client.call_with_timeout(cache.refresh, 20)
             voice.say("net_ok", block=True, force=True)
-            return True
         except Exception as exc:
-            log.warning("network attempt %d/%d failed: %s",
-                        attempt, config.NET_STARTUP_ATTEMPTS, exc)
-            time.sleep(4)
+            log.warning("online but Firestore unreachable: %s", exc)
+            cache.load_disk()
+            voice.say("net_fail", block=True, force=True)
+            online = False
+    else:
+        if not cache.load_disk():
+            log.error("offline AND no cached enrollments — faces can't "
+                      "match until the network returns")
+        voice.say("net_fail", block=True, force=True)
 
-    have_cache = cache.load_disk()
-    voice.say("net_fail", block=True, force=True)
-    if not have_cache:
-        log.error("offline AND no cached enrollments — faces can't match "
-                  "until the network returns")
-
-    def reconnect() -> None:
+    def monitor(state: bool) -> None:
+        """Announces every up/down transition in real time (3s polling,
+        2 consecutive failures before declaring down to avoid flapping)."""
+        fails = 0
         while True:
-            time.sleep(config.NET_RECONNECT_SECONDS)
-            try:
-                cache.refresh()
-                log.info("network is back")
-                voice.say("net_ok", force=True)
-                return
-            except Exception:
-                pass
+            time.sleep(3)
+            if _net_online():
+                fails = 0
+                if not state:
+                    log.info("internet connected")
+                    voice.say("net_ok", force=True)
+                    state = True
+                    try:  # fresh enrollments + queued events will sync
+                        firestore_client.call_with_timeout(cache.refresh, 60)
+                    except Exception:
+                        pass
+            else:
+                fails += 1
+                if fails >= 2 and state:
+                    log.info("internet disconnected")
+                    voice.say("net_lost", force=True)
+                    state = False
 
-    threading.Thread(target=reconnect, daemon=True).start()
-    return False
+    threading.Thread(target=monitor, args=(online,), daemon=True).start()
 
 
 def main() -> None:
@@ -162,11 +210,27 @@ def main() -> None:
     writer = firestore_client.EventWriter(db)
     writer.start_retry_loop()
 
+    overrides = firestore_client.OverrideCleaner(db)
+    overrides.start_auto_sweep()
+
     detector = face_matcher.FaceDetector()
     embedder = face_matcher.FaceEmbedder()
     eye_detector = face_matcher.EyeDetector() if config.BLINK_REQUIRED else None
     blink_gate = face_matcher.BlinkGate()
     camera = Camera()
+
+    # PIR motion sensor: camera streams only while someone is around.
+    pir = None
+    if config.PIR_ENABLED:
+        try:
+            from gpiozero import MotionSensor
+
+            pir = MotionSensor(config.PIR_GPIO)
+            log.info("PIR sensor active on GPIO%d", config.PIR_GPIO)
+        except Exception as exc:
+            log.warning("PIR unavailable (%s) — camera stays always on", exc)
+    camera_on = True
+    last_activity = time.monotonic()
 
     voice.say("starting", block=True, force=True)
     log.info("ready")
@@ -178,8 +242,18 @@ def main() -> None:
     blink_timeouts = 0
     emb_buffer: list = []  # rolling window fused before each match
     last_dark_prompt = 0.0
+    pending_uid = None     # temporal consistency: same uid must win
+    pending_count = 0      # CONFIRM_MATCHES times in a row
 
     while True:
+        # Idle: camera off, block until the PIR sees someone.
+        if pir is not None and not camera_on:
+            pir.wait_for_motion()
+            log.info("motion detected — camera on")
+            camera.start()
+            camera_on = True
+            last_activity = time.monotonic()
+
         frame = camera.read()
         if frame is None:
             time.sleep(0.1)
@@ -193,8 +267,19 @@ def main() -> None:
             blink_timeouts = 0
             blink_gate.reset()
             emb_buffer.clear()
-            # Dark room + no face: someone may be there but invisible.
             now = time.monotonic()
+            # PIR still seeing someone counts as activity.
+            if pir is not None and pir.motion_detected:
+                last_activity = now
+            # Nobody around long enough -> stop streaming until motion.
+            if (pir is not None and camera_on
+                    and now - last_activity > config.CAMERA_OFF_AFTER_SECONDS):
+                log.info("no motion for %ds — camera off",
+                         config.CAMERA_OFF_AFTER_SECONDS)
+                camera.stop()
+                camera_on = False
+                continue
+            # Dark room + no face: someone may be there but invisible.
             if now - last_dark_prompt > config.NO_FACE_PROMPT_SECONDS:
                 small = cv2.cvtColor(cv2.resize(frame, (160, 90)),
                                      cv2.COLOR_BGR2GRAY)
@@ -204,7 +289,8 @@ def main() -> None:
             time.sleep(0.05)
             continue
 
-        face, score = detected
+        face, score, eyes = detected
+        last_activity = time.monotonic()  # a face is definitely activity
         quality = guide(face, score, frame)
         if quality == "bad":
             stable = 0
@@ -225,7 +311,8 @@ def main() -> None:
             else:
                 voice.say("hold_still")
 
-        crop = face_matcher.crop_face(frame, face)
+        # Eye-level alignment before cropping — same as the app's pipeline.
+        crop = face_matcher.aligned_crop(frame, face, eyes)
         if crop is None:
             stable = 0
             continue
@@ -289,7 +376,20 @@ def main() -> None:
                 blink_timeouts = 0
                 blink_gate.reset()
                 emb_buffer.clear()
+                pending_uid = None
+                pending_count = 0
                 time.sleep(2)  # let them reposition / walk away
+            continue
+
+        # Temporal consistency: only record after the SAME student wins
+        # CONFIRM_MATCHES consecutive fused windows — a different winner
+        # (or a one-frame fluke) restarts the count.
+        if uid == pending_uid:
+            pending_count += 1
+        else:
+            pending_uid = uid
+            pending_count = 1
+        if pending_count < config.CONFIRM_MATCHES:
             continue
 
         fails = 0
@@ -298,6 +398,8 @@ def main() -> None:
         blink_timeouts = 0
         blink_gate.reset()
         emb_buffer.clear()
+        pending_uid = None
+        pending_count = 0
         info = cache.snapshot().get(uid, {})
         name = info.get("name") or ""
 

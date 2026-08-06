@@ -1,9 +1,26 @@
 import 'package:flutter/material.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_radius.dart';
 import '../models/room_model.dart';
 import '../services/master_data_service.dart';
 import '../widgets/add_room_dialog.dart';
 import '../widgets/confirm_and_delete.dart';
 import '../widgets/edit_room_dialog.dart';
+import '../widgets/management_icon_avatar.dart';
+
+/// Picks a recognizable icon for a room's `type` field ("Classroom",
+/// "Lab", "Auditorium") instead of a one-size-fits-all icon.
+IconData _iconForRoomType(String type) {
+  switch (type.toLowerCase()) {
+    case 'lab':
+      return Icons.science_rounded;
+    case 'auditorium':
+      return Icons.event_seat_rounded;
+    case 'classroom':
+    default:
+      return Icons.meeting_room_rounded;
+  }
+}
 
 class RoomScreen extends StatefulWidget {
   const RoomScreen({super.key});
@@ -47,15 +64,23 @@ class _RoomScreenState extends State<RoomScreen> {
           }
 
           return ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
+            // Bottom padding clears the extended FAB — otherwise the
+            // last card ends up hidden behind it once the list is long
+            // enough to scroll.
+            padding: const EdgeInsets.fromLTRB(15, 10, 15, 100),
             itemCount: rooms.length,
             itemBuilder: (context, index) {
               final room = rooms[index];
               return Card(
+                elevation: 1,
                 margin: const EdgeInsets.symmetric(vertical: 8),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.lg),
+                ),
                 child: ListTile(
-                  leading: CircleAvatar(
-                    child: Text(room.roomNumber),
+                  leading: ManagementIconAvatar(
+                    icon: _iconForRoomType(room.type),
+                    color: AppColors.primary,
                   ),
                   title: Text("Room ${room.roomNumber} - ${room.type}"),
                   subtitle: Text("${room.building} | Cap: ${room.capacity}"),

@@ -99,16 +99,20 @@ double _calculateTenengrad(img.Image image) {
   return sum / count;
 }
 
-bool isSharpEnough(img.Image image, {double? dynamicThreshold}) {
+/// The combined sharpness figure, before any threshold is applied.
+///
+/// Split out from [isSharpEnough] because the scanning enrollment needs
+/// to *rank* frames against each other, not just accept or reject them —
+/// a yes/no answer can't tell you which of two usable frames to keep.
+double calculateSharpness(img.Image image) {
   final laplacianScore = calculateLaplacianVariance(image);
   final sobelScore = _calculateTenengrad(image);
+  return (laplacianScore * 0.6) + (sobelScore * 0.4);
+}
 
+bool isSharpEnough(img.Image image, {double? dynamicThreshold}) {
   final threshold = dynamicThreshold ?? QualityThresholds.minSharpness;
-  final combinedScore = (laplacianScore * 0.6) + (sobelScore * 0.4);
-
-  ("Sharpness → Laplacian: $laplacianScore, Sobel: $sobelScore, Combined: $combinedScore");
-
-  return combinedScore > threshold;
+  return calculateSharpness(image) > threshold;
 }
 
 

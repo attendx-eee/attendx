@@ -6,14 +6,14 @@ import 'package:intl/intl.dart';
 import '../../core/constants/app_config.dart';
 import '../../core/responsive/responsive.dart';
 import '../../core/theme/app_spacing.dart';
+import '../../attendance/services/manual_attendance_service.dart';
 import '../../services/attendance_service.dart';
 import '../../services/firestore_service.dart';
 
+import '../dashboard/widgets/attendance_overview_card.dart';
 import 'widgets/attendance_summary_card.dart';
-import 'widgets/today_status_card.dart';
 import 'widgets/attendance_calendar_card.dart';
 import 'widgets/subject_attendance_card.dart';
-import 'widgets/monthly_statistics_card.dart';
 import 'widgets/attendance_history_card.dart';
 
 /// Attendance overview computed entirely from Raspberry Pi check-in
@@ -36,28 +36,41 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   int _absentDays = 0;
   int _totalDays = 0;
 
-  // Today
-  bool _checkedIn = false;
-  bool _checkedOut = false;
-  String _checkInTime = "--";
-  String _checkOutTime = "--";
-  int _attendedToday = 0;
-  int _totalToday = 0;
-
   // Current month
-  int _monthPresent = 0;
-  int _monthAbsent = 0;
-  int _monthLate = 0;
   Map<int, String> _calendarStatuses = {};
   String _monthLabel = '';
 
   List<SubjectAttendance> _subjects = [];
   List<AttendanceHistory> _history = [];
 
+  // Semester monthly overview (moved here from the dashboard).
+  final PageController _pageController = PageController(initialPage: 0);
+  int _selectedMonthIndex = 0;
+  final List<String> _semesterMonths = [
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December"
+  ];
+  Map<String, Map<String, int>> _semesterAttendance = {
+    for (final m in [
+      "July", "August", "September", "October", "November", "December"
+    ])
+      m: {"present": 0, "absent": 0, "total": 0, "late": 0},
+  };
+
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
   }
 
   String _fmtTime(DateTime d) {
@@ -78,6 +91,24 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
       final events = await _service.eventsFor(uid);
 
+      // Corrections an admin (or an approved CR) made by hand. Without
+      // these the student would still see "absent" on a day staff had
+      // already fixed for them, and would rightly not trust the screen.
+      final manual = await ManualAttendanceService.instance.forStudent(uid);
+
+      // Semester-wide monthly breakdown (independent query — a failure
+      // here shouldn't block the rest of the screen).
+      var semesterAttendance = _semesterAttendance;
+      try {
+        semesterAttendance = await _service.semesterStats(
+          uid: uid,
+          studentData: student,
+          months: _semesterMonths,
+        );
+      } catch (e) {
+        debugPrint('Semester attendance load failed: $e');
+      }
+
       final today = DateTime.now();
       final todayId = AppConfig.dateId(today);
       final start = _service.semesterStart();
@@ -86,7 +117,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       final subjectTotals = <String, List<int>>{};
 
       int presentDays = 0, absentDays = 0, totalDays = 0;
-      int monthPresent = 0, monthAbsent = 0, monthLate = 0;
       final calendar = <int, String>{};
 
       for (var date = start;
@@ -100,9 +130,16 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           year: year,
           weekday: weekday,
         );
-        if (periods.isEmpty) continue;
 
-        final event = events[AppConfig.dateId(date)];
+        final dateId = AppConfig.dateId(date);
+        final manualMark = manual[dateId];
+
+        // Normally an empty timetable means "not a college day", but a
+        // manual mark says someone deliberately recorded this day, so it
+        // still counts.
+        if (periods.isEmpty && manualMark == null) continue;
+
+        final event = events[dateId];
         final checkIn =
             event?['checkIn'] is Timestamp ? event!['checkIn'] as Timestamp : null;
         final checkOut =
@@ -112,6 +149,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           date: date,
           periods: periods,
           checkIn: checkIn,
+          manual: manualMark,
         );
         if (verdict == null) continue;
 
@@ -129,24 +167,17 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           totalDays--; // today, not checked in yet — don't judge it
         }
 
-        // Current month + calendar.
+        // Current month calendar colouring.
         if (isCurrentMonth) {
           if (isToday) {
             calendar[date.day] = 'today';
-            if (verdict.present) {
-              monthPresent++;
-              if (verdict.late) monthLate++;
-            }
           } else if (verdict.present) {
-            monthPresent++;
             calendar[date.day] = verdict.late ? 'late' : 'present';
-            if (verdict.late) monthLate++;
-          } else {
-            monthAbsent++;
+          } else if (event != null) {
             // Only mark the calendar red when a check-in event exists
             // but didn't qualify. Days with no check-in at all stay
             // blank on the calendar (stats still count them).
-            if (event != null) calendar[date.day] = 'absent';
+            calendar[date.day] = 'absent';
           }
         }
 
@@ -169,33 +200,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           )) {
             tally[0]++;
           }
-        }
-      }
-
-      // Today's card.
-      final todayEvent = events[todayId];
-      final todayCheckIn = todayEvent?['checkIn'] is Timestamp
-          ? todayEvent!['checkIn'] as Timestamp
-          : null;
-      final todayCheckOut = todayEvent?['checkOut'] is Timestamp
-          ? todayEvent!['checkOut'] as Timestamp
-          : null;
-
-      final todayPeriods = await _service.scheduledPeriods(
-        department: department,
-        year: year,
-        weekday: AppConfig.dayName(today),
-      );
-
-      var attendedToday = 0;
-      for (final period in todayPeriods) {
-        if (_service.periodAttended(
-          date: today,
-          period: period,
-          checkIn: todayCheckIn,
-          checkOut: todayCheckOut,
-        )) {
-          attendedToday++;
         }
       }
 
@@ -236,7 +240,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                 : null;
 
             final verdict = _service.classifyDay(
-                date: cursor, periods: periods, checkIn: ci);
+                date: cursor,
+                periods: periods,
+                checkIn: ci,
+                manual: manual[AppConfig.dateId(cursor)]);
 
             final isToday = AppConfig.dateId(cursor) == todayId;
             String status;
@@ -277,23 +284,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         _absentDays = absentDays;
         _totalDays = totalDays;
 
-        _checkedIn = todayCheckIn != null;
-        _checkedOut = todayCheckOut != null;
-        _checkInTime =
-            todayCheckIn == null ? '--' : _fmtTime(todayCheckIn.toDate());
-        _checkOutTime =
-            todayCheckOut == null ? '--' : _fmtTime(todayCheckOut.toDate());
-        _attendedToday = attendedToday;
-        _totalToday = todayPeriods.length;
-
-        _monthPresent = monthPresent;
-        _monthAbsent = monthAbsent;
-        _monthLate = monthLate;
         _calendarStatuses = calendar;
         _monthLabel = DateFormat('MMMM yyyy').format(today);
 
         _subjects = subjects;
         _history = history;
+        _semesterAttendance = semesterAttendance;
         _loading = false;
       });
     } catch (e) {
@@ -366,14 +362,22 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             totalDays: _totalDays,
                           ),
                           SizedBox(height: Responsive.h(20)),
-                          TodayStatusCard(
-                            checkedIn: _checkedIn,
-                            checkedOut: _checkedOut,
-                            checkInTime: _checkInTime,
-                            checkOutTime: _checkOutTime,
-                            attendedClasses: _attendedToday,
-                            totalClasses: _totalToday,
+                          AttendanceOverviewCard(
+                            months: _semesterMonths,
+                            selectedIndex: _selectedMonthIndex,
+                            pageController: _pageController,
+                            attendance: _semesterAttendance,
+                            onMonthChanged: (index) {
+                              setState(() {
+                                _selectedMonthIndex = index;
+                              });
+                            },
                           ),
+                          // Today's check-in / check-out status lives on
+                          // the dashboard, which is the screen a student
+                          // opens to answer "am I marked in yet". Having
+                          // it here too meant the same two timestamps in
+                          // two places; this page is about the semester.
                           SizedBox(height: Responsive.h(20)),
                           AttendanceCalendarCard(
                             year: today.year,
@@ -383,13 +387,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                           ),
                           SizedBox(height: Responsive.h(20)),
                           SubjectAttendanceCard(subjects: _subjects),
-                          SizedBox(height: Responsive.h(20)),
-                          MonthlyStatisticsCard(
-                            present: _monthPresent,
-                            absent: _monthAbsent,
-                            late: _monthLate,
-                            leave: 0,
-                          ),
+                          // The monthly present / absent / late tiles
+                          // that used to sit here duplicated the month
+                          // pager near the top of this same page, which
+                          // already shows those figures for whichever
+                          // month is selected — and does it for every
+                          // month, not just the current one.
                           SizedBox(height: Responsive.h(20)),
                           AttendanceHistoryCard(entries: _history),
                           SizedBox(height: Responsive.h(30)),

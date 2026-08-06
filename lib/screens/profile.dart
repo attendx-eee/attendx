@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/attendance_service.dart';
+import '../services/profile_photo_service.dart';
 import '../core/responsive/responsive.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_radius.dart';
@@ -85,13 +86,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _isUploading = true;
       });
 
-      String uid = FirebaseAuth.instance.currentUser!.uid;
+      final uid = FirebaseAuth.instance.currentUser!.uid;
+
+      // Upload to Cloud Storage and store the resulting download URL —
+      // NOT the local file path, which would only ever resolve on this
+      // one device and would be invisible to anyone viewing the profile
+      // elsewhere (e.g. an admin browsing the CR directory).
+      final url = await ProfilePhotoService.instance
+          .upload(uid, File(pickedFile.path));
 
       await FirebaseFirestore.instance.collection('students').doc(uid).update({
-        'profileImageUrl': pickedFile.path,
+        'profileImageUrl': url,
       });
 
       if (mounted) {
+        setState(() => data = {...data, 'profileImageUrl': url});
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text("Profile display picture updated successfully."),
@@ -101,6 +110,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
       }
     } catch (e) {
       debugPrint("Media capture selection error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Could not upload photo: $e"),
+            backgroundColor: AppColors.danger,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isUploading = false);
     }
@@ -178,6 +196,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _removePhoto() async {
     try {
       final uid = FirebaseAuth.instance.currentUser!.uid;
+      await ProfilePhotoService.instance.delete(uid);
       await FirebaseFirestore.instance.collection('students').doc(uid).update({
         'profileImageUrl': FieldValue.delete(),
       });
@@ -357,13 +376,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   color: AppColors.primary, strokeWidth: 2.5),
                             ),
                           )
-                        // Local file images are device-only; web shows
-                        // the placeholder avatar.
+                        // The just-picked file previews instantly while
+                        // the upload is in flight; once saved, the real
+                        // Storage URL loads the same way on any device.
                         : (!kIsWeb && _profileImage != null
                             ? Image.file(_profileImage!, fit: BoxFit.cover)
-                            : (!kIsWeb && data['profileImageUrl'] != null
-                                ? Image.file(File(data['profileImageUrl']),
-                                    fit: BoxFit.cover)
+                            : (data['profileImageUrl'] != null
+                                ? Image.network(
+                                    data['profileImageUrl'],
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, _, _) => Container(
+                                      color: Colors.white,
+                                      child: Icon(Icons.person_rounded,
+                                          size: 56,
+                                          color: AppColors.secondary),
+                                    ),
+                                  )
                                 : Container(
                                     color: Colors.white,
                                     child: Icon(Icons.person_rounded,

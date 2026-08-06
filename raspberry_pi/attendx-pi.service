@@ -1,8 +1,11 @@
 # Template — setup.sh fills in @USER@ and @DIR@ and installs it.
 [Unit]
 Description=AttendX face attendance kiosk
-After=network-online.target time-sync.target
-Wants=network-online.target
+# Deliberately NOT waiting for network-online: the kiosk starts the moment
+# the system is up, says "Initializing", genuinely probes for the network,
+# runs offline from the disk cache if there is none, and announces
+# "Internet connection successful" the moment the hotspot really connects.
+After=local-fs.target
 # Don't start (and crash-loop) until the secrets/model are in place:
 ConditionPathExists=@DIR@/serviceAccountKey.json
 ConditionPathExists=@DIR@/mobilefacenet.tflite

@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 
 import '../admin/models/period_model.dart';
 import '../admin/services/timetable_service.dart';
+import '../attendance/models/manual_attendance_model.dart';
+import '../attendance/services/manual_attendance_service.dart';
 import '../core/constants/app_config.dart';
 
 /// Attendance derived from Raspberry Pi check-in/check-out events.
@@ -10,14 +12,48 @@ import '../core/constants/app_config.dart';
 /// The Pi writes one document per student per day to
 /// [AppConfig.attendanceEventsCollection] with `checkIn` (first face match
 /// at the entrance) and `checkOut` (latest exit). This service turns those
-/// raw timestamps into attendance against the timetable:
+/// raw timestamps into attendance against fixed wall-clock cutoffs
+/// ([AppConfig.presentCutoffOn] / [AppConfig.lateCutoffOn]):
 ///
-/// - Present: checked in no later than [AppConfig.presentGraceMinutes]
-///   (20 min) after the first scheduled period starts — or any time before
-///   the last period ends.
-/// - Late: present, but check-in was more than
-///   [AppConfig.onTimeGraceMinutes] (10 min) after the first period start.
-/// - Absent: a scheduled college day with no valid check-in.
+/// - Present: checked in at or before [AppConfig.presentCutoffLabel]
+///   (9:15 AM).
+/// - Late: present, but checked in after [AppConfig.presentCutoffLabel],
+///   up to and including [AppConfig.lateCutoffLabel] (9:30 AM).
+/// - Absent: no check-in for a scheduled college day, or checked in after
+///   [AppConfig.lateCutoffLabel] (9:30 AM) — arriving that late doesn't
+///   count as present even though a check-in event exists.
+/// What a single calendar day resolved to.
+enum DayStatus {
+  present,
+  late,
+  absent,
+
+  /// Sunday, holiday, or a day with nothing on the timetable.
+  noClass,
+
+  /// Later than today — not judged yet.
+  upcoming,
+}
+
+/// One day's verdict plus the manual mark behind it, if any. The screen
+/// uses [manual] to badge corrected days and to prefill the edit sheet.
+class DayVerdict {
+  final DateTime date;
+  final DayStatus status;
+  final ManualAttendance? manual;
+
+  const DayVerdict({
+    required this.date,
+    required this.status,
+    required this.manual,
+  });
+
+  bool get isManual => manual != null;
+
+  bool get isMarkable =>
+      status != DayStatus.upcoming || manual != null;
+}
+
 class AttendanceService {
   AttendanceService._();
 
@@ -68,18 +104,34 @@ class AttendanceService {
     return periods;
   }
 
-  /// Classifies one day. Returns null when the day has no scheduled
-  /// classes (holiday / Sunday / empty timetable).
+  /// Classifies one day against the fixed 9:15 / 9:30 AM cutoffs. Returns
+  /// null when the day has no scheduled classes (holiday / Sunday / empty
+  /// timetable).
+  ///
+  /// A [manual] mark — recorded by an admin, or a CR the admin approved
+  /// for that month — always wins. Manual marks exist precisely for the
+  /// days the Pi got wrong (missed scan, camera down, on-duty, medical
+  /// leave), so deferring to the derived verdict would defeat the point.
+  /// A manual mark also forces the day to count even when the timetable
+  /// shows nothing scheduled, since someone deliberately recorded it.
   ({bool present, bool late, int lateByMinutes})? classifyDay({
     required DateTime date,
     required List<PeriodModel> periods,
     required Timestamp? checkIn,
+    ManualAttendance? manual,
   }) {
+    if (manual != null) {
+      return (
+        present: manual.isPresent,
+        late: manual.isLate,
+        lateByMinutes: 0,
+      );
+    }
+
     if (periods.isEmpty) return null;
 
-    final firstStart = AppConfig.timeOn(date, periods.first.startTime);
     final lastEnd = AppConfig.timeOn(date, periods.last.endTime);
-    if (firstStart == null || lastEnd == null) return null;
+    if (lastEnd == null) return null;
 
     if (checkIn == null) {
       return (present: false, late: false, lateByMinutes: 0);
@@ -92,12 +144,21 @@ class AttendanceService {
       return (present: false, late: false, lateByMinutes: 0);
     }
 
-    final lateBy = inTime.difference(firstStart).inMinutes;
+    final presentCutoff = AppConfig.presentCutoffOn(date);
+    final lateCutoff = AppConfig.lateCutoffOn(date);
+
+    // Checked in after 9:30 AM -> absent, regardless of a valid check-in.
+    if (inTime.isAfter(lateCutoff)) {
+      return (present: false, late: false, lateByMinutes: 0);
+    }
+
+    final lateByMinutes =
+        inTime.isAfter(presentCutoff) ? inTime.difference(presentCutoff).inMinutes : 0;
 
     return (
       present: true,
-      late: lateBy > AppConfig.onTimeGraceMinutes,
-      lateByMinutes: lateBy > 0 ? lateBy : 0,
+      late: lateByMinutes > 0,
+      lateByMinutes: lateByMinutes,
     );
   }
 
@@ -126,6 +187,10 @@ class AttendanceService {
         for (final doc in snapshot.docs)
           (doc.data()['date'] ?? '').toString(): doc.data(),
       };
+
+      // Manual corrections layered on top of the Pi's record.
+      final manualByDate =
+          await ManualAttendanceService.instance.forStudent(uid);
 
       const monthNumbers = {
         'January': 1, 'February': 2, 'March': 3, 'April': 4,
@@ -162,13 +227,15 @@ class AttendanceService {
             weekday: weekday,
           );
 
-          final event = eventsByDate[AppConfig.dateId(date)];
+          final dateId = AppConfig.dateId(date);
+          final event = eventsByDate[dateId];
           final verdict = classifyDay(
             date: date,
             periods: periods,
             checkIn: event?['checkIn'] is Timestamp
                 ? event!['checkIn'] as Timestamp
                 : null,
+            manual: manualByDate[dateId],
           );
 
           if (verdict == null) continue; // not a college day
@@ -204,6 +271,77 @@ class AttendanceService {
       for (final doc in snapshot.docs)
         (doc.data()['date'] ?? '').toString(): doc.data(),
     };
+  }
+
+  /// Per-day verdict for one calendar month, for the marking calendar.
+  ///
+  /// [manualByDate] is passed in rather than fetched so the calling screen
+  /// can drive it from a live stream and repaint the moment a mark is
+  /// written, without this service re-querying on every rebuild.
+  Future<Map<int, DayVerdict>> monthVerdicts({
+    required Map<String, dynamic> studentData,
+    required Map<String, Map<String, dynamic>> eventsByDate,
+    required Map<String, ManualAttendance> manualByDate,
+    required int calendarYear,
+    required int month,
+  }) async {
+    final department = AppConfig.departmentOf(studentData);
+    final year = AppConfig.yearOf(studentData);
+
+    final daysInMonth = DateTime(calendarYear, month + 1, 0).day;
+    final today = DateTime.now();
+    final result = <int, DayVerdict>{};
+
+    for (var d = 1; d <= daysInMonth; d++) {
+      final date = DateTime(calendarYear, month, d);
+      final dateId = AppConfig.dateId(date);
+      final manual = manualByDate[dateId];
+
+      final periods = await scheduledPeriods(
+        department: department,
+        year: year,
+        weekday: AppConfig.dayName(date),
+      );
+
+      final future = date.isAfter(DateTime(today.year, today.month, today.day));
+
+      // Future days are shown but not judged — nothing has happened yet.
+      // A manual mark is still honoured (an admin may pre-record planned
+      // on-duty or approved leave).
+      if (future && manual == null) {
+        result[d] = DayVerdict(
+          date: date,
+          status: periods.isEmpty ? DayStatus.noClass : DayStatus.upcoming,
+          manual: null,
+        );
+        continue;
+      }
+
+      final event = eventsByDate[dateId];
+      final verdict = classifyDay(
+        date: date,
+        periods: periods,
+        checkIn: event?['checkIn'] is Timestamp
+            ? event!['checkIn'] as Timestamp
+            : null,
+        manual: manual,
+      );
+
+      final DayStatus status;
+      if (verdict == null) {
+        status = DayStatus.noClass;
+      } else if (!verdict.present) {
+        status = DayStatus.absent;
+      } else if (verdict.late) {
+        status = DayStatus.late;
+      } else {
+        status = DayStatus.present;
+      }
+
+      result[d] = DayVerdict(date: date, status: status, manual: manual);
+    }
+
+    return result;
   }
 
   /// First day of the current semester (Jul 1 or Jan 1 of the academic year).

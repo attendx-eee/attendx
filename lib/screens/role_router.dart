@@ -18,12 +18,31 @@ class RoleRouter extends StatelessWidget {
 
   static bool isAdminRole(String role) => role == 'hod' || role == 'office';
 
+  /// Sentinel returned by [_resolveRole] when a signed-in account has no
+  /// `students/{uid}` doc at all — an incomplete registration (see
+  /// RegisterScreen/FaceEnrollmentScreen: the profile is only saved once
+  /// face enrollment succeeds). This happens if the app was force-closed,
+  /// crashed, or otherwise left mid-enrollment without going through the
+  /// explicit "Cancel Registration" flow.
+  static const String _incompleteRegistration = '__incomplete_registration__';
+
   Future<String> _resolveRole() async {
     final uid = overrideUid ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return 'student';
 
     final doc = await FirestoreService().getStudent(uid);
-    if (!doc.exists) return 'student';
+    if (!doc.exists) {
+      // Only clean up for the real signed-in session, never for a
+      // (currently unused, but defensive) admin-preview overrideUid.
+      if (overrideUid == null) {
+        try {
+          await FirebaseAuth.instance.currentUser?.delete();
+        } catch (_) {
+          await FirebaseAuth.instance.signOut();
+        }
+      }
+      return _incompleteRegistration;
+    }
 
     return (doc.data()?['role'] ?? 'student').toString().toLowerCase();
   }
@@ -39,8 +58,15 @@ class RoleRouter extends StatelessWidget {
           );
         }
 
+        if (snapshot.data == _incompleteRegistration) {
+          return const LoginScreen();
+        }
+
         if (isAdminRole(snapshot.data!)) {
-          return const MasterHome();
+          // MasterHome can't reach the login screen itself without
+          // pulling the student tree in behind it, so the mobile app
+          // hands it the way back.
+          return MasterHome(onLogout: signOutToLogin);
         }
 
         return DashboardScreen(overrideUid: overrideUid);

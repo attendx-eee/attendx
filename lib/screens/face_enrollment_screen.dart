@@ -1,15 +1,49 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'dart:async';
 
 import '../models/face_enrollment_imports.dart';
+import '../services/enrollment/scan_guide.dart';
+import '../services/enrollment/scan_harvester.dart';
+import '../services/profile_photo_service.dart';
+import '../services/quality/face_quality_score.dart';
+import 'login.dart';
+import 'role_router.dart';
 
 class FaceEnrollmentScreen extends StatefulWidget {
-  const FaceEnrollmentScreen({super.key});
+  /// When true, this screen is a required step of registration:
+  /// the back button/gesture is disabled (no skipping), and on
+  /// success it replaces the whole stack with [RoleRouter] instead
+  /// of just popping back to whatever screen pushed it.
+  final bool mandatory;
+
+  /// The profile RegisterScreen collected but held back from Firestore.
+  /// Required when [mandatory] is true — this screen is what actually
+  /// saves it, atomically with the face data, once enrollment succeeds.
+  /// Ignored for re-enrollment (mandatory: false), since the profile
+  /// already exists in that case.
+  final Map<String, dynamic>? pendingProfile;
+
+  /// Profile photo picked at registration (mandatory for CR, optional for
+  /// students) — held in memory the same way, and only actually uploaded
+  /// to Cloud Storage once enrollment succeeds.
+  final File? pendingPhoto;
+
+  const FaceEnrollmentScreen({
+    super.key,
+    this.mandatory = false,
+    this.pendingProfile,
+    this.pendingPhoto,
+  }) : assert(
+          !mandatory || pendingProfile != null,
+          'pendingProfile is required when mandatory is true',
+        );
 
   @override
   State<FaceEnrollmentScreen> createState() => _FaceEnrollmentScreenState();
@@ -26,48 +60,40 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen> {
   final OccupancyService occupancyService = const OccupancyService();
   final FaceCenteringService faceCenteringService = const FaceCenteringService();
   final PoseService poseService = const PoseService();
-  final HeadStabilityService headStabilityService = const HeadStabilityService();
-  final EmbeddingFusionService embeddingFusionService = const EmbeddingFusionService();
   final EyeDistanceService eyeDistanceService = const EyeDistanceService();
   final FaceAlignmentService faceAlignmentService = const FaceAlignmentService();
-  final FaceMatchService faceMatchService = FaceMatchService();
-  final CalibrationService calibrationService=CalibrationService();
+  final CalibrationService calibrationService = CalibrationService();
+  // HeadStabilityService, EmbeddingFusionService and FaceMatchService are
+  // no longer used here. Stability was a gate on when to take a photo,
+  // which a continuous scan doesn't need; fusion and near-duplicate
+  // comparison both moved into ScanHarvester, where they can be weighted
+  // by frame quality.
   final BlinkService blinkService = BlinkService();
   final EnrollmentGuideStyleService guideStyleService = const EnrollmentGuideStyleService();
 
-  final Map<EnrollmentStage,List<List<double>>> _stageEmbeddings = {
-    EnrollmentStage.front: [],
-    EnrollmentStage.left: [],
-    EnrollmentStage.right: [],
-    EnrollmentStage.up: [],
-    EnrollmentStage.down: [],
-  };
-
-  EnrollmentStage _currentStage = EnrollmentStage.front;
-
   EnrollmentFlowState _flowState = EnrollmentFlowState.warmingUp;
 
-  final Map<EnrollmentStage, int> _poseCounts = {
-        EnrollmentStage.front: 0,
-        EnrollmentStage.left: 0,
-        EnrollmentStage.right: 0,
-        EnrollmentStage.up: 0,
-        EnrollmentStage.down: 0,
-      };
+  /// Collects the best frames of the sweep.
+  ///
+  /// Replaces the old per-pose counters and embedding buckets outright.
+  /// Those tracked "have we taken two photos of the left side yet"; this
+  /// tracks "which frames, out of every one the camera has produced, are
+  /// the best representatives of each angle" — a question the student
+  /// never has to participate in answering.
+  final ScanHarvester _harvester = ScanHarvester();
 
-  final Map<EnrollmentStage, int> _requiredCounts = {
-    EnrollmentStage.front: 6,
-    EnrollmentStage.left: 3,
-    EnrollmentStage.right: 3,
-    EnrollmentStage.up: 2,
-    EnrollmentStage.down: 2,
-  };
+  /// Decides what the student is asked to do next.
+  final ScanGuide _guide = ScanGuide();
 
+  /// Measurements from the current frame, computed in the cheap
+  /// pre-check and handed to the scorer once the crop exists.
+  double _lastOccupancy = 0;
+  double _lastCenterOffset = 0;
 
-  final List<List<double>> _capturedEmbeddings = [];
-
-  double? _previousFaceCenterX;
-  double? _previousFaceCenterY;
+  /// When the required bins filled. Optional far-angle bins get this
+  /// long to fill before the scan closes itself.
+  DateTime? _optionalGraceStarted;
+  static const int _optionalGraceMs = 2500;
 
   CameraController? _cameraController;
   bool _isCameraInitialized = false;
@@ -81,6 +107,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen> {
   bool _hasEnrollmentFailed = false;
 
   Rect? _detectedFaceRect;
+  bool _cameraUnavailable = false;
   
 
 Rect _getGuideRect(Size screenSize) {
@@ -98,35 +125,14 @@ Rect _getGuideRect(Size screenSize) {
 
 
 
-  bool _isCurrentStageSatisfied(
-  FacePose detectedPose,
-  Face face,
-) {
+  // The old per-stage pose gate lived here. It answered "is the head in
+  // the one position we're currently waiting for", which forced the
+  // student to hit five discrete targets in a fixed order. The
+  // harvester's angle bins answer the more useful question — "which part
+  // of the sweep does this frame belong to" — and accept frames from any
+  // of them, in any order, whenever they happen to be good.
 
-  switch (_currentStage) {
-
-    case EnrollmentStage.front:
-      return detectedPose == FacePose.front;
-
-    case EnrollmentStage.left:
-      return detectedPose == FacePose.left;
-
-    case EnrollmentStage.right:
-      return detectedPose == FacePose.right;
-
-    case EnrollmentStage.up:
-      return detectedPose == FacePose.up;
-
-    case EnrollmentStage.down:
-      return detectedPose == FacePose.down;
-
-    case EnrollmentStage.completed:
-      return false;
-  }
-}
-  
   String _statusMessage = "Initializing biometric scanner...";
-  List<double> targetEmbedding = [];
 
   @override
   void initState() {
@@ -172,7 +178,8 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
 
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
-        _updateStatus("No hardware imaging sensors detected.");
+        _updateStatus("No camera detected on this device.");
+        if (mounted) setState(() => _cameraUnavailable = true);
         return;
       }
 
@@ -223,7 +230,8 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
 
       _startFrameSubscription();
     } catch (e) {
-      _updateStatus("Failed to safely bridge camera subsystem.");
+      _updateStatus("Camera failed to start. Check camera permission.");
+      if (mounted) setState(() => _cameraUnavailable = true);
     }
   }
 
@@ -269,7 +277,6 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
       }
 
       final face = faces.first;
-      final detectedPose = poseService.detect(face);
 
       // Guard: the frame arrived asynchronously — bail out if the
       // widget was disposed while the detector was working.
@@ -309,92 +316,16 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
       
       
 
-      if (_currentStage == EnrollmentStage.front) {
-        // ---------- Liveness not completed ----------
-        if (!_isLivenessVerified) {
-          if (centerResult.passed && alignmentResult.passed) {
-            _setFlowState(
-              EnrollmentFlowState.waitingForBlink,
-              "Blink once to continue",
-            );
-
-            if (blinkService.checkBlink(face)) {
-              _setFlowState(
-                EnrollmentFlowState.waitingForStability,
-                "Blink detected. Hold still...",
-              );
-
-              _isLivenessVerified = true;
-
-              _setFlowState(
-                EnrollmentFlowState.livenessVerified,
-                "Liveness Verified!",
-              );
-            }
-          } else {
-            _setFlowState(
-              EnrollmentFlowState.aligningFace,
-              "Center your face",
-            );
-          }
-
-          return;
-        }
-
-        // ---------- Blink completed ----------
-        if (centerResult.passed &&
-            alignmentResult.passed &&
-            headStabilityService.isStable(
-              headStabilityService.calculateMovement(
-                previousX: _previousFaceCenterX ?? face.boundingBox.center.dx,
-                previousY: _previousFaceCenterY ?? face.boundingBox.center.dy,
-                currentX: face.boundingBox.center.dx,
-                currentY: face.boundingBox.center.dy,
-              ),
-              20,
-            )) {
-
-          _setFlowState(
-            EnrollmentFlowState.capturing,
-            "Capturing...",
-          );
-
-          _showCurrentInstruction();
-
-          await Future.delayed(const Duration(milliseconds: 350));
-
-          await _handleFrameCapture(cameraImage, face);
-        } else {
-          _setFlowState(
-            EnrollmentFlowState.waitingForStability,
-            "Hold still...",
-          );
-          _showCurrentInstruction();
-        }
-
-        return;
-      }
-
-      // ---------- Remaining poses ----------
-      if (_isCurrentStageSatisfied(detectedPose, face)) {
-        if (centerResult.passed && alignmentResult.passed) {
-
-          _setFlowState(
-            EnrollmentFlowState.capturing,
-            "Capturing...",
-          );
-
-          await _handleFrameCapture(cameraImage, face);
-        } else {
-          _setFlowState(
-            EnrollmentFlowState.aligningFace,
-            "Center your face before capture",
-          );
-        }
-      } else {
-        _showCurrentInstruction();
-      }
-
+      // Framing measurements, kept for the scorer once the crop exists.
+      _lastOccupancy = occupancyService.calculateOccupancy(
+        face: face,
+        frameWidth: cameraImage.width.toDouble(),
+        frameHeight: cameraImage.height.toDouble(),
+      );
+      _lastCenterOffset = centerResult.distance /
+          (math.sqrt(previewSize.width * previewSize.width +
+                  previewSize.height * previewSize.height) /
+              2);
 
       if (mounted) {
         setState(() {
@@ -402,28 +333,60 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
         });
       }
 
-
-      final occupancy = occupancyService.calculateOccupancy(
-        face: face,
-        frameWidth: cameraImage.width.toDouble(),
-        frameHeight: cameraImage.height.toDouble(),
-      );
-
-      if (!occupancyService.isOccupancyValid(
-        occupancy,
-        QualityThresholds.minFaceOccupancy,
-        QualityThresholds.maxFaceOccupancy,
-      )) {
+      // ---------- Liveness, once, before any frame is kept ----------
+      //
+      // Still a blink, still up front — but it now gates the whole scan
+      // rather than just the front pose, and the sweep that follows is
+      // itself corroborating evidence: a printed photo or a phone held
+      // up to the lens cannot produce a coherent series of yaw angles
+      // with consistent face geometry across them.
+      if (!_isLivenessVerified) {
+        if (!centerResult.passed || !alignmentResult.passed) {
+          _setFlowState(
+            EnrollmentFlowState.aligningFace,
+            "Position your face in the circle",
+          );
+          return;
+        }
 
         _setFlowState(
-          EnrollmentFlowState.aligningFace,
-          occupancy < QualityThresholds.minFaceOccupancy
-              ? "Move closer"
-              : "Move farther",
+          EnrollmentFlowState.waitingForBlink,
+          "Blink once to begin the scan",
         );
+
+        if (blinkService.checkBlink(face)) {
+          _isLivenessVerified = true;
+          _setFlowState(
+            EnrollmentFlowState.livenessVerified,
+            "Starting scan",
+          );
+        }
 
         return;
       }
+
+      // ---------- Continuous scan ----------
+      //
+      // No pose gate, no stability wait, no capture countdown. Every
+      // frame is offered to the harvester, which keeps it only if it is
+      // both good and useful. The old flow spent most of its time
+      // waiting for the student to hold a pose it approved of; this one
+      // spends that time collecting.
+      final phaseChanged = _guide.update(
+        harvester: _harvester,
+        faceDetected: true,
+      );
+
+      _setFlowState(
+        EnrollmentFlowState.capturing,
+        ScanGuide.title(_guide.phase),
+      );
+
+      if (phaseChanged) {
+        HapticFeedback.selectionClick();
+      }
+
+      await _harvestFrame(cameraImage, face);
 
           } catch (e) {
             debugPrint("Stream frame processing error: $e");
@@ -507,150 +470,136 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
     });
   }
 
-  Future<void> _handleFrameCapture(CameraImage streamImage, Face detectedFace) async {
-    setState(() {
-      _isSaving = true;
-    });
-
-    _setFlowState(
-      EnrollmentFlowState.processing,
-      "Processing face...",
-    );
-
+  /// Offers one live frame to the harvester.
+  ///
+  /// This is the heart of the scanning flow, and it differs from the old
+  /// capture step in two ways that matter.
+  ///
+  /// First, it never fails enrollment. The previous version aborted the
+  /// entire session the moment a single frame came back blurry or badly
+  /// lit — which, during a head turn, is most of them. Here a poor frame
+  /// is simply not kept, and the sweep carries on.
+  ///
+  /// Second, it leaves the camera stream running. Stopping and
+  /// restarting the stream around every capture cost roughly a second
+  /// each time and is what made enrollment feel like a series of
+  /// photographs. Frames arriving while this is still working are
+  /// dropped by the `_isProcessingFrame` guard in the caller, which is
+  /// the right behaviour: there is always another frame coming.
+  Future<void> _harvestFrame(
+      CameraImage streamImage, Face detectedFace) async {
     try {
-      await _cameraController?.stopImageStream();
+      final imageFile = await _convertStreamFrameToFile(streamImage);
+      if (imageFile == null) return;
 
-      File? imageFile = await _convertStreamFrameToFile(streamImage);
-      if (imageFile == null) throw Exception("Isolate conversion target output failed.");
+      final croppedFace =
+          await faceCropService.cropFace(imageFile, detectedFace);
+      if (croppedFace == null) return;
 
-      final croppedFace = await faceCropService.cropFace(imageFile, detectedFace);
-      if (croppedFace == null) {
-        _signalEnrollmentFailure("Isolation crop mapping broke. Retry standard posture.");
-        return;
-      }
-
-      // Use improved sharpness evaluation      
-
-      final deviceModel = await getDeviceModel(); // use platform info
+      final deviceModel = await getDeviceModel();
       final threshold = calibrationService.calibratedSharpnessThreshold ??
           DeviceQualityThresholds.getSharpnessThreshold(deviceModel);
 
-      final isSharp = sharpnessService.isSharpEnough(croppedFace, dynamicThreshold: threshold);
-      if (!isSharp) {
-        _signalEnrollmentFailure("Camera struggling to capture a clear face. Please hold steady or adjust lighting.");
-        return;
-      }
-
-
-
-
+      final sharpness = sharpnessService.calculateSharpness(croppedFace);
 
       final brightness = brightnessService.calculateBrightness(croppedFace);
-
-      debugPrint('Brightness Score: $brightness',);
-
-      if (brightness < QualityThresholds.minBrightness || brightness > QualityThresholds.maxBrightness) {
-
-        _signalEnrollmentFailure(
-          'Face lighting not suitable.',
-        );
-
-        return;
-      }
-
       final contrast = contrastService.calculateContrast(croppedFace);
 
-      debugPrint('Contrast Score: $contrast',);
+      // Flip test-time-augmentation: averaging the embedding with its
+      // mirror produces a more stable, canonical vector for this capture
+      // (see FaceEmbeddingService.generateEmbeddingTTA), which is what the
+      // duplicate-face check and later logins are compared against.
+      final normalized =
+          faceEmbeddingService.generateEmbeddingTTA(croppedFace);
 
-      if (contrast < QualityThresholds.minContrast) {
+      final quality = FaceQualityScorer.instance.score(
+        sharpness: sharpness,
+        brightness: brightness,
+        contrast: contrast,
+        occupancy: _lastOccupancy,
+        centerOffset: _lastCenterOffset,
+        yaw: detectedFace.headEulerAngleY ?? 0,
+        pitch: detectedFace.headEulerAngleX ?? 0,
+        roll: detectedFace.headEulerAngleZ ?? 0,
+        sharpnessThreshold: threshold,
+        // The sweep is *made* of off-centre views, so the yaw and pitch
+        // limits are opened right up here. The harvester decides which
+        // angle bin a frame belongs to; anything outside every bin is
+        // dropped there, not treated as a quality defect.
+        maxYaw: 60,
+        maxPitch: 40,
+      );
 
-        _signalEnrollmentFailure(
-          'Low contrast face image.',
-        );
+      final feedback = _harvester.offer(
+        embedding: normalized,
+        quality: quality,
+      );
 
-        return;
+      if (!mounted) return;
+
+      // Only the two states a student can act on reach the screen.
+      // Narrating every redundant or duplicate frame would produce text
+      // that changes several times a second and says nothing.
+      if (feedback == ScanFeedback.poorQuality &&
+          _harvester.lastFailure != null) {
+        _updateStatus(_harvester.lastFailure!);
       }
 
-      final rawEmbedding = faceEmbeddingService.generateEmbedding(croppedFace);
-      final normalized = faceEmbeddingService.normalizeEmbedding(rawEmbedding);
+      setState(() {}); // repaint the progress ring
 
-      final currentStageEmbeddings = _stageEmbeddings[_currentStage]!;
+      if (_harvester.hasRequiredCoverage && !_isSaving) {
+        // Required coverage reached. Give the optional far-angle bins a
+        // brief window to fill — they widen the template — but never
+        // wait on them, so someone who can't turn far still finishes.
+        _optionalGraceStarted ??= DateTime.now();
 
-      for (final embedding in currentStageEmbeddings) {
-        final similarity = faceMatchService.cosineSimilarity(
-          normalized,
-          embedding,
-        );
+        final graceElapsed = DateTime.now()
+                .difference(_optionalGraceStarted!)
+                .inMilliseconds >
+            _optionalGraceMs;
 
-        if (similarity > 0.995) {
-          if (mounted) {
-            setState(() {
-              _isSaving = false;
-            });
-          }
-
-          await Future.delayed(
-            const Duration(milliseconds: 300),
-          );
-
-          _startFrameSubscription();
-          return;
+        if (graceElapsed || _harvester.outstandingBins.isEmpty) {
+          await _finishScan();
         }
       }
-
-      _capturedEmbeddings.add(normalized);
-      _stageEmbeddings[_currentStage]!.add(normalized);
-
-      _poseCounts[_currentStage] =
-          _poseCounts[_currentStage]! + 1;
-
-      _updateStatus(
-        "${_currentStage.name} "
-        "${_poseCounts[_currentStage]}/${_requiredCounts[_currentStage]}",
-      );
-
-      if (_poseCounts[_currentStage]! >= _requiredCounts[_currentStage]!) {
-        _advanceStage();
-        _showCurrentInstruction();
-      } else {
-        _updateStatus(
-          "${_currentStage.name} "
-          "${_poseCounts[_currentStage]}/${_requiredCounts[_currentStage]}",
-        );
-      }
-
-      if (_currentStage == EnrollmentStage.completed) {
-
-        final fusedEmbedding =
-            embeddingFusionService.average(
-                _capturedEmbeddings);
-
-        targetEmbedding =
-            faceEmbeddingService
-                .normalizeEmbedding(
-                    fusedEmbedding);
-
-        await _uploadEmbeddingsToFirebase();
-
-        return;
-      }
-
-      _isSaving = false;
-
-      if (_currentStage != EnrollmentStage.completed) {
-        _showCurrentInstruction();
-      }
-
-      await Future.delayed(
-        const Duration(milliseconds: 500),
-      );
-
-      _startFrameSubscription();
-
-      
     } catch (e) {
-      _signalEnrollmentFailure("Pipeline processing failure: $e");
+      // A single bad frame is not an enrollment failure. The sweep is
+      // still running and the next frame is milliseconds away.
+      debugPrint('Frame harvest skipped: $e');
     }
+  }
+
+  /// Ends the scan: grades the harvest, then either saves or sends the
+  /// student round again.
+  Future<void> _finishScan() async {
+    if (_isSaving) return;
+
+    setState(() => _isSaving = true);
+
+    try {
+      await _cameraController?.stopImageStream();
+    } catch (_) {
+      // Already stopped — nothing to undo.
+    }
+
+    final grade = _harvester.grade();
+    _harvester.debugDump();
+
+    if (!grade.passed) {
+      _signalEnrollmentFailure(
+        "${grade.reason}\n\n"
+        "Captured ${grade.sampleCount} usable frames across "
+        "${grade.binsCovered} angles (quality ${grade.band}).",
+      );
+      return;
+    }
+
+    _setFlowState(
+      EnrollmentFlowState.processing,
+      "Scan complete — building your face profile",
+    );
+
+    await _uploadEmbeddingsToFirebase();
   }
 
   
@@ -668,12 +617,9 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
   }
 
   void _resetForManualRetry() {
-    _capturedEmbeddings.clear();
-    _stageEmbeddings.forEach((stage, embeddings) {
-      embeddings.clear();
-    });
-    _poseCounts.updateAll((key, value) => 0);
-    _currentStage = EnrollmentStage.front;
+    _harvester.reset();
+    _guide.reset();
+    _optionalGraceStarted = null;
     _flowState = EnrollmentFlowState.warmingUp;
     _resetBlinkState();
     setState(() {
@@ -682,90 +628,14 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
       _isLivenessVerified = false;
       _isLowLightPaused = false;
       _flowState = EnrollmentFlowState.waitingForFace;
-      _statusMessage = "Position your face inside the Frame";
+      _statusMessage = "Position your face in the circle";
     });
     _startFrameSubscription();
   }
 
-  void _showCurrentInstruction() {
-
-    switch (_currentStage) {
-
-      case EnrollmentStage.front:
-        _updateStatus(
-          "Look straight",
-        );
-        break;
-
-      case EnrollmentStage.left:
-        _setFlowState(
-            EnrollmentFlowState.waitingForPose,
-            "Turn head left slightly",
-        );
-        break;
-
-      case EnrollmentStage.right:
-        _setFlowState(
-            EnrollmentFlowState.waitingForPose,
-            "Turn head right slightly",
-        );
-        break;
-
-      case EnrollmentStage.up:
-        _setFlowState(
-            EnrollmentFlowState.waitingForPose,
-            "Look slightly up",
-        );
-        break;
-
-      case EnrollmentStage.down:
-        _setFlowState(
-            EnrollmentFlowState.waitingForPose,
-            "Look slightly down",
-        );
-        break;
-
-
-      case EnrollmentStage.completed:
-        break;
-    }
-  }
-
-  void _advanceStage() {
-
-  switch (_currentStage) {
-
-    case EnrollmentStage.front:
-      _currentStage = EnrollmentStage.left;
-      _showCurrentInstruction();
-      break;
-
-    case EnrollmentStage.left:
-      _currentStage = EnrollmentStage.right;
-      _showCurrentInstruction();
-      break;
-
-    case EnrollmentStage.right:
-      _currentStage = EnrollmentStage.up;
-      _showCurrentInstruction();
-      break;
-
-    case EnrollmentStage.up:
-      _currentStage = EnrollmentStage.down;
-      _showCurrentInstruction();
-      break;
-
-    case EnrollmentStage.down:
-      _currentStage = EnrollmentStage.completed;
-      _showCurrentInstruction();
-      break;
-
-
-    case EnrollmentStage.completed:
-      break;
-  }
-}
-
+  // The fixed instruction table and stage-advance ladder that used to
+  // live here are now ScanGuide, which derives the next instruction from
+  // what the harvester still needs rather than from a hardcoded order.
 
 
   Future<File?> _convertStreamFrameToFile(CameraImage image) async {
@@ -805,37 +675,124 @@ Future<void> _uploadEmbeddingsToFirebase() async {
   }
 
   try {
-    // Build stage-wise embeddings map (excluding smile)
-    final Map<String, List<double>> fusedEmbeddings = {
-      "front": embeddingFusionService.average(
-          _stageEmbeddings[EnrollmentStage.front]!),
+    // One representative vector per angle bin the scan actually
+    // covered, each a quality-weighted mean of that bin's best frames.
+    //
+    // Weighted rather than a flat average because a bin's frames are not
+    // equally good — the sweep passes through each angle and only some
+    // of those moments were sharp. Letting a marginal frame pull the
+    // bin's vector as hard as a crisp one is how a template ends up
+    // representing nobody in particular.
+    final Map<String, List<double>> fusedEmbeddings =
+        _harvester.fusedByBin();
 
-      "left": embeddingFusionService.average(
-          _stageEmbeddings[EnrollmentStage.left]!),
+    if (fusedEmbeddings.isEmpty) {
+      _signalEnrollmentFailure(
+        "The scan didn't capture enough of your face. Please try again "
+        "in better light.",
+      );
+      return;
+    }
 
-      "right": embeddingFusionService.average(
-          _stageEmbeddings[EnrollmentStage.right]!),
+    final grade = _harvester.grade();
 
-      "up": embeddingFusionService.average(
-          _stageEmbeddings[EnrollmentStage.up]!),
+    _setFlowState(
+      EnrollmentFlowState.checkingDuplicate,
+      "Checking this face isn't already enrolled...",
+    );
 
-      "down": embeddingFusionService.average(
-          _stageEmbeddings[EnrollmentStage.down]!),
-    };
+    // ---------- duplicate-face guard ----------
+    // Compare against every OTHER student's stored enrollment before
+    // saving anything. Uses findDuplicate(), which cross-compares every
+    // pose captured just now against every pose the candidate has on
+    // file (not a single blended vector against single poses — that
+    // mismatch was under-scoring real duplicates and letting them
+    // through). See AdaptiveFaceService.findDuplicate doc comment.
+    final allEnrollments = await firestoreService.getAllFaceEnrollments();
+    final otherCandidates = allEnrollments.docs
+        .where((doc) => doc.id != user.uid)
+        .map((doc) => FaceCandidate.fromDoc(doc.id, doc.data()))
+        .toList();
+
+    if (otherCandidates.isNotEmpty) {
+      final liveCentroid =
+          AdaptiveFaceService.fuse(fusedEmbeddings.values.toList());
+
+      final duplicate = AdaptiveFaceService.instance.findDuplicate(
+        livePoses: fusedEmbeddings,
+        liveCentroid: liveCentroid,
+        candidates: otherCandidates,
+      );
+
+      if (duplicate.accepted) {
+        _signalEnrollmentFailure(
+          "This face already appears to be enrolled under a different "
+          "account. If you believe this is a mistake, contact the "
+          "administration office — nothing has been saved.",
+        );
+        return;
+      }
+    }
 
     _setFlowState(
       EnrollmentFlowState.uploading,
       "Saving enrollment...",
-    );    
-
-    // Call Firestore service with name + registration number
-    await firestoreService.updateFaceEmbeddings(
-      user.uid,
-      fusedEmbeddings,
     );
 
-    _showSnackbar("All stage embeddings stored securely!", Colors.green);
-    if (mounted) Navigator.pop(context);
+    if (widget.mandatory) {
+      // The photo (mandatory for CR, optional for students) uploads now,
+      // right alongside the rest of the profile — not at pick time —
+      // for the same reason the profile itself waited: nothing should
+      // exist anywhere until enrollment actually succeeds.
+      var profile = widget.pendingProfile!;
+      if (widget.pendingPhoto != null) {
+        _setFlowState(
+          EnrollmentFlowState.uploading,
+          "Uploading profile photo...",
+        );
+        final photoUrl = await ProfilePhotoService.instance
+            .upload(user.uid, widget.pendingPhoto!);
+        profile = {...profile, 'profileImageUrl': photoUrl};
+      }
+
+      // First-time registration: profile + face data are written
+      // together, atomically, only now that enrollment has actually
+      // succeeded (see FirestoreService.completeRegistrationWithFace).
+      await firestoreService.completeRegistrationWithFace(
+        uid: user.uid,
+        profile: profile,
+        fusedEmbeddings: fusedEmbeddings,
+        grade: grade,
+      );
+    } else {
+      // Re-enrollment: the profile already exists, just refresh the
+      // face data and the faceEnrolled/faceImagesCaptured flags on it.
+      await firestoreService.updateFaceEmbeddings(
+        user.uid,
+        fusedEmbeddings,
+        grade: grade,
+      );
+    }
+
+    _showSnackbar(
+      "Face profile saved — ${grade.sampleCount} frames across "
+      "${grade.binsCovered} angles (${grade.band}).",
+      Colors.green,
+    );
+
+    if (mounted) {
+      if (widget.mandatory) {
+        // Registration's required step just finished — go straight
+        // into the app instead of popping back to the register form.
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const RoleRouter()),
+          (_) => false,
+        );
+      } else {
+        Navigator.pop(context);
+      }
+    }
 
     _setFlowState(
       EnrollmentFlowState.completed,
@@ -858,6 +815,52 @@ Future<void> _uploadEmbeddingsToFirebase() async {
 
   void _resetBlinkState() {
     blinkService.resetBlinkState();
+  }
+
+  /// Only relevant when [widget.mandatory] is true: the profile was never
+  /// saved (see FaceEnrollmentScreen doc comment), so there's nothing to
+  /// "skip enrollment and finish later" — the account itself is rolled
+  /// back instead, so the same email can be used to register again.
+  Future<void> _cancelRegistration() async {
+    final confirm = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Text("Cancel Registration?"),
+            content: const Text(
+              "Nothing has been saved yet. Your account will be deleted so "
+              "you can register again — including a chance to enroll your "
+              "face — whenever you're ready.",
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text("Keep Trying"),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text("Cancel & Delete Account",
+                    style: TextStyle(color: Colors.red)),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!confirm) return;
+
+    try {
+      await FirebaseAuth.instance.currentUser?.delete();
+    } catch (_) {
+      await FirebaseAuth.instance.signOut();
+    }
+
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
   }
 
   void _updateStatus(String msg) {
@@ -911,15 +914,48 @@ Future<void> _uploadEmbeddingsToFirebase() async {
     
 
 
-    return Scaffold(
+    return PopScope(
+      canPop: !widget.mandatory,
+      child: Scaffold(
       appBar: AppBar(
-        title: const Text("Biometric Asset Enrollment"),
+        automaticallyImplyLeading: !widget.mandatory,
+        title: Text(widget.mandatory
+            ? "Enroll Your Face (Required)"
+            : "Biometric Asset Enrollment"),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         elevation: 0,
       ),
       body: !_isCameraInitialized
-          ? const Center(child: CircularProgressIndicator(color: Colors.blueAccent))
+          ? Center(
+              child: _cameraUnavailable
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 28),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.videocam_off_rounded,
+                              size: 44, color: Colors.redAccent),
+                          const SizedBox(height: 16),
+                          Text(_statusMessage,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(fontSize: 14)),
+                          if (widget.mandatory) ...[
+                            const SizedBox(height: 20),
+                            OutlinedButton(
+                              onPressed: _cancelRegistration,
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.redAccent,
+                                side: const BorderSide(color: Colors.redAccent),
+                              ),
+                              child: const Text("Cancel Registration"),
+                            ),
+                          ],
+                        ],
+                      ),
+                    )
+                  : const CircularProgressIndicator(color: Colors.blueAccent),
+            )
           : Stack(
               children: [
                 SizedBox(
@@ -1007,6 +1043,36 @@ Future<void> _uploadEmbeddingsToFirebase() async {
                             ),
                           ],
                         ),
+
+                        // Live scan progress. Shows how much of the sweep
+                        // is covered, not how many photos have been
+                        // taken — the student is never asked to think in
+                        // shots, so the progress shouldn't be counted in
+                        // them either.
+                        if (_isLivenessVerified &&
+                            !_hasEnrollmentFailed &&
+                            !_isSaving) ...[
+                          const SizedBox(height: 14),
+                          Text(
+                            ScanGuide.subtitle(_guide.phase),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 12),
+                          ),
+                          const SizedBox(height: 10),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(100),
+                            child: LinearProgressIndicator(
+                              value: _harvester.progress,
+                              minHeight: 6,
+                              color: Colors.tealAccent,
+                              backgroundColor: Colors.white24,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          _ScanBinStrip(harvester: _harvester),
+                        ],
+
                         if (_isSaving) ...[
                           const SizedBox(height: 16),
                           const LinearProgressIndicator(color: Colors.blueAccent, backgroundColor: Colors.white24)
@@ -1024,7 +1090,20 @@ Future<void> _uploadEmbeddingsToFirebase() async {
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                               elevation: 0,
                             ),
-                          )
+                          ),
+                          if (widget.mandatory) ...[
+                            const SizedBox(height: 10),
+                            OutlinedButton(
+                              onPressed: _cancelRegistration,
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.redAccent,
+                                minimumSize: const Size(double.infinity, 45),
+                                side: const BorderSide(color: Colors.redAccent),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                              child: const Text("Cancel Registration"),
+                            ),
+                          ],
                         ]
                       ],
                     ),
@@ -1032,6 +1111,63 @@ Future<void> _uploadEmbeddingsToFirebase() async {
                 ),
               ],
             ),
+      ),
+    );
+  }
+}
+
+/// The row of angle pips under the scan progress bar.
+///
+/// Gives the sweep a visible shape: the student can see which directions
+/// are already covered and which the scan is still waiting on, without
+/// any of it being phrased as a photo count. Required angles are drawn
+/// solid; the optional far-angle ones sit at half opacity so an
+/// unfilled one doesn't read as a failure.
+class _ScanBinStrip extends StatelessWidget {
+  final ScanHarvester harvester;
+
+  const _ScanBinStrip({required this.harvester});
+
+  static const List<ScanBin> _order = [
+    ScanBin.farLeft,
+    ScanBin.left,
+    ScanBin.up,
+    ScanBin.centre,
+    ScanBin.down,
+    ScanBin.right,
+    ScanBin.farRight,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: _order.map((bin) {
+        final required = ScanHarvester.requiredBins.contains(bin);
+        final progress = harvester.progressFor(bin);
+        final complete = harvester.isBinComplete(bin);
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 3),
+          child: Opacity(
+            opacity: required ? 1 : 0.55,
+            child: Container(
+              width: 22,
+              height: 5,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(100),
+                color: complete
+                    ? Colors.tealAccent
+                    : Color.lerp(
+                        Colors.white24,
+                        Colors.tealAccent,
+                        progress,
+                      ),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 }

@@ -80,6 +80,14 @@ class EnrollmentGuideStyleService {
           icon: Icons.memory,
         );
 
+      case EnrollmentFlowState.checkingDuplicate:
+        return const EnrollmentGuideStyle(
+          borderColor: Colors.cyan,
+          iconColor: Colors.cyan,
+          textColor: Colors.white,
+          icon: Icons.fact_check_outlined,
+        );
+
       case EnrollmentFlowState.uploading:
         return const EnrollmentGuideStyle(
           borderColor: Colors.cyan,

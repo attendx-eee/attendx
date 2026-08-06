@@ -6,6 +6,7 @@ import '../core/theme/app_spacing.dart';
 import '../screens/profile.dart';
 import '../screens/attendance/attendance_screen.dart';
 import '../screens/face_enrollment_screen.dart';
+import '../screens/face_verification_screen.dart';
 import '../notifications/notification_screen.dart';
 import '../screens/login.dart';
 
@@ -26,6 +27,111 @@ class MoreScreen extends StatelessWidget {
     super.key,
     required this.student,
   });
+
+  /// Asks the signed-in user to re-enter their password before letting
+  /// them touch their biometric profile, and verifies it with Firebase.
+  /// Returns true only once the password has actually been confirmed.
+  Future<bool> _verifyPassword(
+    BuildContext context,
+    AuthService authService,
+  ) async {
+    final passController = TextEditingController();
+    bool obscure = true;
+
+    final entered = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          icon: const Icon(Icons.lock_person_rounded,
+              color: AppColors.primary, size: 40),
+          title: const Text('Confirm It\'s You'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Enter your password to update your face enrollment.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: passController,
+                obscureText: obscure,
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: 'Current Password',
+                  prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      obscure
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      size: 20,
+                    ),
+                    onPressed: () => setDialogState(() => obscure = !obscure),
+                  ),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, passController.text),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                elevation: 0,
+              ),
+              child: const Text('Verify'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (entered == null || entered.isEmpty) return false;
+
+    final error = await authService.reauthenticate(password: entered);
+    if (error != null) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(error),
+            backgroundColor: AppColors.danger,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return false;
+    }
+    return true;
+  }
+
+  /// Identity check before touching the face profile: verify by face
+  /// against the account's own enrolled embeddings when one exists,
+  /// otherwise fall back to a password confirmation (nothing enrolled
+  /// yet to match against).
+  Future<bool> _verifyIdentity(
+    BuildContext context,
+    AuthService authService,
+  ) async {
+    if (student['faceEnrolled'] == true) {
+      final result = await Navigator.push<bool?>(
+        context,
+        MaterialPageRoute(builder: (_) => const FaceVerificationScreen()),
+      );
+      return result == true;
+    }
+    return _verifyPassword(context, authService);
+  }
 
   Future<bool> _logoutDialog(BuildContext context) async {
     return await showDialog(
@@ -107,7 +213,12 @@ class MoreScreen extends StatelessWidget {
         subtitle: "Update biometric profile",
         icon: Icons.face_retouching_natural,
         iconColor: Colors.green,
-        onTap: () {
+        onTap: () async {
+          // Re-verify identity before letting anyone touch the face
+          // profile used for attendance and Pi kiosk recognition.
+          final verified = await _verifyIdentity(context, authService);
+          if (!verified || !context.mounted) return;
+
           Navigator.push(
             context,
             MaterialPageRoute(

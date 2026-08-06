@@ -4,6 +4,32 @@ class AuthService {
 
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
+  /// Signs in anonymously so the registration form can run pre-signup
+  /// availability checks — Firestore rules require `signedIn()` for any
+  /// read, and no real account exists yet while someone's still filling
+  /// out the form. No-ops if already signed in (as anyone). Returns null
+  /// on success, or an error if anonymous sign-in isn't available (e.g.
+  /// the Anonymous provider isn't enabled in the Firebase Console yet) —
+  /// callers must treat that as "live checks unavailable" and fail
+  /// silently, never block registration on it.
+  Future<String?> signInAnonymouslyForPreCheck() async {
+    if (_auth.currentUser != null) return null;
+    try {
+      await _auth.signInAnonymously();
+      return null;
+    } on FirebaseAuthException catch (e) {
+      return e.message ?? e.code;
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  /// Creates the permanent account. If the caller already holds an
+  /// anonymous session (from [signInAnonymouslyForPreCheck]), this
+  /// upgrades it in place via linkWithCredential — same uid, now a real
+  /// email/password account — instead of creating a second user.
+  /// Otherwise falls back to a fresh sign-up, so registration still
+  /// works even when anonymous sign-in was never available.
   Future<String?> registerUser({
     required String email,
     required String password,
@@ -11,10 +37,20 @@ class AuthService {
 
     try {
 
-      await _auth.createUserWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
+      final current = _auth.currentUser;
+
+      if (current != null && current.isAnonymous) {
+        final credential = EmailAuthProvider.credential(
+          email: email,
+          password: password,
+        );
+        await current.linkWithCredential(credential);
+      } else {
+        await _auth.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+      }
 
       return null;
 

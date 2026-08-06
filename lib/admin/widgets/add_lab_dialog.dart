@@ -3,7 +3,12 @@ import '../models/lab_model.dart';
 import '../services/master_data_service.dart';
 
 class AddLabDialog extends StatefulWidget {
-  const AddLabDialog({super.key});
+  /// Pre-selects the year (e.g. when opened from the Timetable screen
+  /// for a specific year's Add Period form) instead of always defaulting
+  /// to Year 1.
+  final int? initialYear;
+
+  const AddLabDialog({super.key, this.initialYear});
 
   @override
   State<AddLabDialog> createState() => _AddLabDialogState();
@@ -14,7 +19,7 @@ class _AddLabDialogState extends State<AddLabDialog> {
   final _nameController = TextEditingController();
   final _codeController = TextEditingController();
 
-  int _selectedYear = 1;
+  late int _selectedYear = widget.initialYear ?? 1;
   String _selectedSemester = "Odd";
 
   @override

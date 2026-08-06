@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -16,6 +18,18 @@ import '../core/widgets/section_header.dart';
 import '../core/widgets/status_chip.dart';
 import '../timetable/models/timetable_override_model.dart';
 import '../timetable/services/timetable_override_service.dart';
+
+/// Where a period sits relative to the CR's edit window.
+enum _PeriodPhase {
+  /// Not started, or within 15 minutes of starting — still editable.
+  upcoming,
+
+  /// Started more than 15 minutes ago and not yet finished. Locked.
+  ongoing,
+
+  /// Finished, or on a past date. Locked.
+  completed,
+}
 
 /// CR-only screen: temporarily adjust the timetable for a specific date
 /// (cancel a class, set a replacement, change the room). Every change is
@@ -58,26 +72,70 @@ class _CrTimetableScreenState extends State<CrTimetableScreen> {
     return dates;
   }();
 
+  /// Repaints the list every minute so a period flips to GOING ON on its
+  /// own. Without this the lock would only appear the next time some
+  /// other event happened to rebuild the screen, and a CR staring at the
+  /// page at 11:14 would still see an editable card at 11:20.
+  Timer? _ticker;
+
   @override
   void initState() {
     super.initState();
     _selectedDate = _upcomingDates.first;
     _loadBaseSchedule();
     _loadMasterData();
+
+    _ticker = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
   }
 
   String get _dateId => AppConfig.dateId(_selectedDate);
   String get _dayName => AppConfig.dayName(_selectedDate);
 
-  /// A period is completed when the selected date is today and its end
-  /// time has already passed. Completed classes can no longer be edited.
-  bool _isCompleted(PeriodModel period) {
+  /// How far along a period is on the selected date.
+  ///
+  /// The edit window closes 15 minutes after the class starts, not when
+  /// it ends: a cancellation or room change is only worth broadcasting
+  /// while students can still act on it, and once everyone is seated the
+  /// "temporary update" would be rewriting history rather than warning
+  /// anyone. Past dates are fully locked; future dates are wide open.
+  _PeriodPhase _phaseOf(PeriodModel period) {
     final now = DateTime.now();
-    if (AppConfig.dateId(_selectedDate) != AppConfig.dateId(now)) {
-      return false; // future dates are always editable
+    final selectedId = AppConfig.dateId(_selectedDate);
+    final todayId = AppConfig.dateId(now);
+
+    if (selectedId != todayId) {
+      // _upcomingDates only ever holds today onwards, but guard anyway so
+      // a stale screen left open overnight can't edit yesterday.
+      return _selectedDate.isBefore(DateTime(now.year, now.month, now.day))
+          ? _PeriodPhase.completed
+          : _PeriodPhase.upcoming;
     }
+
     final end = AppConfig.timeOn(_selectedDate, period.endTime);
-    return end != null && now.isAfter(end);
+    if (end != null && now.isAfter(end)) return _PeriodPhase.completed;
+
+    final lock =
+        AppConfig.overrideLockTime(_selectedDate, period.startTime);
+    if (lock != null && now.isAfter(lock)) return _PeriodPhase.ongoing;
+
+    return _PeriodPhase.upcoming;
+  }
+
+  /// "11:15" — the cutoff for this period, for messages and the card hint.
+  String _lockLabel(PeriodModel period) {
+    final lock =
+        AppConfig.overrideLockTime(_selectedDate, period.startTime);
+    if (lock == null) return period.startTime;
+    return "${lock.hour.toString().padLeft(2, '0')}:"
+        "${lock.minute.toString().padLeft(2, '0')}";
   }
 
   Future<void> _loadMasterData() async {
@@ -225,12 +283,19 @@ class _CrTimetableScreenState extends State<CrTimetableScreen> {
   // ---------------------------------------------------------------- dialogs
 
   void _showActions(PeriodModel period, TimetableOverride? existing) {
-    // Completed classes are read-only — nothing left to change.
-    if (_isCompleted(period)) {
+    final phase = _phaseOf(period);
+
+    // Once a class is under way (or done), it's read-only.
+    if (phase != _PeriodPhase.upcoming) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-              "This class has already been completed — it can't be changed."),
+            phase == _PeriodPhase.ongoing
+                ? "${period.subject} started at ${period.startTime} and is "
+                    "going on — changes were only possible until "
+                    "${_lockLabel(period)}."
+                : "This class is already over — it can't be changed.",
+          ),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -842,7 +907,8 @@ class _CrTimetableScreenState extends State<CrTimetableScreen> {
                 child: _PeriodCard(
                   period: period,
                   overRide: overrides[period.periodNo],
-                  completed: _isCompleted(period),
+                  phase: _phaseOf(period),
+                  lockLabel: _lockLabel(period),
                   onTap: () =>
                       _showActions(period, overrides[period.periodNo]),
                 ),
@@ -858,15 +924,22 @@ class _CrTimetableScreenState extends State<CrTimetableScreen> {
 class _PeriodCard extends StatelessWidget {
   final PeriodModel period;
   final TimetableOverride? overRide;
-  final bool completed;
+  final _PeriodPhase phase;
+
+  /// "11:15" — when this period's edit window closed.
+  final String lockLabel;
+
   final VoidCallback onTap;
 
   const _PeriodCard({
     required this.period,
     required this.overRide,
-    this.completed = false,
+    required this.phase,
+    required this.lockLabel,
     required this.onTap,
   });
+
+  bool get _locked => phase != _PeriodPhase.upcoming;
 
   ChipState get _chipState {
     switch (overRide?.type) {
@@ -896,7 +969,7 @@ class _PeriodCard extends StatelessWidget {
         : period.room;
 
     return Opacity(
-      opacity: completed ? 0.55 : 1,
+      opacity: _locked ? 0.55 : 1,
       child: PrimaryCard(
       onTap: onTap,
       child: Row(
@@ -941,11 +1014,25 @@ class _PeriodCard extends StatelessWidget {
                       style: AppTextStyles.caption
                           .copyWith(fontStyle: FontStyle.italic)),
                 ],
+                // Spell the cutoff out on the card itself, so a CR sees
+                // the deadline before they've missed it rather than only
+                // discovering it in a snackbar afterwards.
+                if (phase == _PeriodPhase.ongoing) ...[
+                  SizedBox(height: Responsive.h(4)),
+                  Text("Locked — changes closed at $lockLabel",
+                      style: AppTextStyles.caption
+                          .copyWith(color: AppColors.warning)),
+                ],
               ],
             ),
           ),
           SizedBox(width: Responsive.w(8)),
-          if (completed)
+          if (phase == _PeriodPhase.ongoing)
+            const StatusChip(
+              text: "GOING ON",
+              state: ChipState.warning,
+            )
+          else if (phase == _PeriodPhase.completed)
             const StatusChip(
               text: "COMPLETED",
               state: ChipState.success,

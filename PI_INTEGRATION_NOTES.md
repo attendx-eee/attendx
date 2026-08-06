@@ -73,6 +73,15 @@ Rules the Pi must follow:
     The Pi must use the **same .tflite model** as the app
     (`assets/models/mobilefacenet.tflite`), same preprocessing
     (pixel − 127.5) / 127.5.
+  - The app now builds every embedding (enrollment templates AND live
+    login captures) with flip test-time-augmentation: run inference on
+    the face crop AND its horizontal mirror, average the two raw
+    192-float outputs, then normalize. This makes stored templates more
+    stable/canonical, which should only help match scores against a
+    plain single-frame Pi capture — but for best accuracy the Pi should
+    eventually do the same (one extra inference on `cv2.flip(face, 1)`
+    per check-in, averaged in before normalizing). Not required for
+    compatibility, just a recommended upgrade.
   - Refresh cached templates periodically — the app **adapts embeddings
     over time** (adaptive learning), so re-download at least daily.
 - `students/{uid}` — only if extra profile data is needed.

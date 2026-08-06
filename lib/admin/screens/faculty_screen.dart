@@ -1,9 +1,12 @@
 import 'package:attendx/admin/widgets/add_faculty_dialog.dart';
 import 'package:attendx/admin/widgets/edit_faculty_dialog.dart';
 import 'package:flutter/material.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_radius.dart';
 import '../models/faculty_model.dart';
 import '../services/master_data_service.dart';
 import '../widgets/confirm_and_delete.dart';
+import '../widgets/management_icon_avatar.dart';
 
 class FacultyScreen extends StatefulWidget {
   const FacultyScreen({super.key});
@@ -73,6 +76,10 @@ class _FacultyScreenState extends State<FacultyScreen> {
           }
 
           return ListView.builder(
+            // Bottom padding clears the extended FAB — otherwise the
+            // last card ends up hidden behind it once the list is long
+            // enough to scroll.
+            padding: const EdgeInsets.fromLTRB(0, 8, 0, 100),
             itemCount: faculty.length,
 
             itemBuilder: (context, index) {
@@ -80,15 +87,20 @@ class _FacultyScreenState extends State<FacultyScreen> {
               final item = faculty[index];
 
               return Card(
+                elevation: 1,
                 margin: const EdgeInsets.symmetric(
                   horizontal: 15,
                   vertical: 8,
                 ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.lg),
+                ),
 
                 child: ListTile(
 
-                  leading: CircleAvatar(
-                    child: Text(item.shortName),
+                  leading: const ManagementIconAvatar(
+                    icon: Icons.person_rounded,
+                    color: AppColors.teal,
                   ),
 
                   title: Text(item.name),

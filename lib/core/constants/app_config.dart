@@ -27,6 +27,16 @@ class AppConfig {
   static const String adminEmail = 'admin@attendx.app';
 
   // ------------------------------------------------------------------
+  // Cloudinary — profile photo hosting (unsigned client-side uploads,
+  // no backend/API-secret needed). Fill these in from your own Cloudinary
+  // account: Dashboard for the cloud name, Settings -> Upload -> Upload
+  // presets for the preset name (must be created with Signing Mode:
+  // Unsigned). See ProfilePhotoService for how these are used.
+  // ------------------------------------------------------------------
+  static const String cloudinaryCloudName = 'siigtukw';
+  static const String cloudinaryUploadPreset = 'attendx_profile';
+
+  // ------------------------------------------------------------------
   // Firestore contract shared with the Raspberry Pi.
   // The Pi writes check-in/check-out events; the app derives attendance
   // from them against the timetable. Keep these names in sync with the
@@ -44,6 +54,23 @@ class AppConfig {
 
   /// Check-in within this many minutes after a period starts = on time.
   static const int onTimeGraceMinutes = 10;
+
+  /// How long after a class starts a CR may still change it.
+  ///
+  /// A temporary timetable update is only useful *before* students walk
+  /// into the room — telling a year their 11:00 class is cancelled at
+  /// 11:40 helps nobody and quietly rewrites what already happened. So a
+  /// period locks 15 minutes past its start time: enough slack for a
+  /// last-minute "sir isn't coming" that everyone can still act on, and
+  /// after that the class reads as GOING ON and can't be edited.
+  static const int overrideLockGraceMinutes = 15;
+
+  /// The moment a class beginning at [startTime] stops being editable
+  /// on [date].
+  static DateTime? overrideLockTime(DateTime date, String startTime) {
+    final start = timeOn(date, startTime);
+    return start?.add(const Duration(minutes: overrideLockGraceMinutes));
+  }
 
   /// Check-in within this many minutes after a period starts still counts
   /// as present (but is flagged as a late check-in). Used for per-period

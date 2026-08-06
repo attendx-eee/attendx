@@ -13,7 +13,9 @@ export '../services/quality/head_stability_service.dart';
 export '../services/embedding/embedding_fusion_service.dart';
 export '../services/quality/eye_distance_service.dart';
 export '../services/quality/face_alignment_service.dart';
-export '../models/enrollment_stage.dart';
+// enrollment_stage.dart is gone: the five-stage ladder it described was
+// replaced by ScanHarvester's angle bins, which the scan fills in any
+// order rather than marching through.
 export '../models/face_pose.dart';
 export '../services/face_debug_painter.dart';
 export '../services/quality/camera_coordinate_transformer.dart';
@@ -22,6 +24,7 @@ export '../services/quality/calibration_service.dart';
 export '../models/calibration_frame.dart';
 export '../services/utils/image_encode_isolate.dart';
 export '../services/face_match_service.dart';
+export '../services/adaptive_face_service.dart';
 export '../models/enrollment_flow_state.dart';
 export '../services/eye_blink_service.dart';
 export '../services/enrollment_guide_color_service.dart';

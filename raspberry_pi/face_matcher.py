@@ -9,6 +9,7 @@ Must mirror the app's AdaptiveFaceService exactly:
 """
 
 import logging
+import math
 
 import cv2
 import numpy as np
@@ -66,7 +67,8 @@ class FaceDetector:
         )
 
     def largest_face(self, frame_bgr: np.ndarray):
-        """Returns ((x, y, w, h), score) of the largest face, or None."""
+        """Returns ((x, y, w, h), score, eyes) of the largest face, or None.
+        eyes = ((right_eye_x, y), (left_eye_x, y)) from YuNet landmarks."""
         h, w = frame_bgr.shape[:2]
         if (w, h) != self.size:
             self.det.setInputSize((w, h))
@@ -77,13 +79,15 @@ class FaceDetector:
         best = max(faces, key=lambda f: f[2] * f[3])
         score = float(best[-1])
         x, y, fw, fh = best[:4]
+        eyes = ((float(best[4]), float(best[5])),
+                (float(best[6]), float(best[7])))
         x0 = max(int(x), 0)
         y0 = max(int(y), 0)
         x1 = min(int(x + fw), w)
         y1 = min(int(y + fh), h)
         if x1 - x0 < 20 or y1 - y0 < 20:
             return None
-        return (x0, y0, x1 - x0, y1 - y0), score
+        return (x0, y0, x1 - x0, y1 - y0), score, eyes
 
 
 def crop_face(frame: np.ndarray, box, top: float | None = None,
@@ -102,6 +106,26 @@ def crop_face(frame: np.ndarray, box, top: float | None = None,
     if x1 - x0 < 20 or y1 - y0 < 20:
         return None
     return frame[y0:y1, x0:x1]
+
+
+def aligned_crop(frame: np.ndarray, box, eyes,
+                 top: float | None = None, bottom: float | None = None,
+                 sides: float | None = None):
+    """Rotate so the eyes are level (the same alignment the app performs
+    at enrollment), then crop. Alignment is a standard FRS accuracy
+    booster — tilted faces otherwise score much lower."""
+    try:
+        (rx, ry), (lx, ly) = eyes
+        angle = math.degrees(math.atan2(ly - ry, lx - rx))
+    except Exception:
+        angle = 0.0
+    if abs(angle) >= 3.0:  # ignore negligible tilt
+        h, w = frame.shape[:2]
+        cx = box[0] + box[2] / 2.0
+        cy = box[1] + box[3] / 2.0
+        m = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
+        frame = cv2.warpAffine(frame, m, (w, h))
+    return crop_face(frame, box, top, bottom, sides)
 
 
 class EyeDetector:
