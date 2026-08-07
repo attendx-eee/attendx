@@ -1,7 +1,10 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../admin/master_data/master_home.dart';
+import '../faculty/models/faculty_account.dart';
+import '../faculty/screens/faculty_home.dart';
 import '../services/firestore_service.dart';
 import 'dashboard/dashboard.dart';
 import 'login.dart';
@@ -69,7 +72,51 @@ class RoleRouter extends StatelessWidget {
           return MasterHome(onLogout: signOutToLogin);
         }
 
+        if (snapshot.data == 'faculty') {
+          return _FacultyGate(
+            uid: overrideUid ?? FirebaseAuth.instance.currentUser!.uid,
+          );
+        }
+
         return DashboardScreen(overrideUid: overrideUid);
+      },
+    );
+  }
+}
+
+/// Loads the faculty profile before showing their home.
+///
+/// FacultyHome needs the whole account — chiefly `facultyId`, which is
+/// what matches them to periods on the timetable — and RoleRouter only
+/// resolved the role string. One extra read, on a screen that is then
+/// stable for the rest of the session.
+class _FacultyGate extends StatelessWidget {
+  final String uid;
+
+  const _FacultyGate({required this.uid});
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      future: FirestoreService().getStudent(uid),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final data = snapshot.data!.data();
+        if (data == null) {
+          return const Scaffold(
+            body: Center(child: Text('Staff record not found.')),
+          );
+        }
+
+        return FacultyHome(
+          account: FacultyAccount.fromMap(uid, data),
+          onLogout: signOutToLogin,
+        );
       },
     );
   }

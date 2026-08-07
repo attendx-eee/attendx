@@ -45,6 +45,10 @@ service cloud.firestore {
       return signedIn() && myRole() is string && myRole().lower() == 'cr';
     }
 
+    function isFaculty() {
+      return signedIn() && myRole() is string && myRole().lower() == 'faculty';
+    }
+
     // ---------- students ----------
     // Signed-in users can read profiles (needed for timetable/CR/admin
     // screens); users create/update only their own doc; admins manage all.
@@ -130,6 +134,28 @@ service cloud.firestore {
         || (isCr()
             && resource.data.crUid == request.auth.uid
             && request.resource.data.status == 'pending');
+
+      allow delete: if isAdmin();
+    }
+
+    // ---------- per-period class attendance ----------
+    // Written by the faculty member teaching the period (after they
+    // confirm the camera's draft) and by admins. Readable by anyone
+    // signed in, because a student has to be able to see their own
+    // subject-wise record — and Firestore can't filter an array on read,
+    // so the document is fetched whole and filtered client-side.
+    //
+    // `markedBy` is pinned to the caller on write, so a faculty member
+    // can't file a period under someone else's name. Deletes are
+    // admin-only: a wrong period should be corrected by re-marking it
+    // (which overwrites, and leaves an audit trail), never by making the
+    // record disappear.
+    match /period_attendance/{id} {
+      allow read: if signedIn();
+
+      allow create, update: if isAdmin()
+        || (isFaculty()
+            && request.resource.data.markedBy == request.auth.uid);
 
       allow delete: if isAdmin();
     }

@@ -13,7 +13,8 @@ class _AddFacultyDialogState extends State<AddFacultyDialog> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _shortController = TextEditingController();
-  
+  final _employeeIdController = TextEditingController();
+
   String? _selectedDesignation;
   
   final List<String> designations = [
@@ -27,6 +28,7 @@ class _AddFacultyDialogState extends State<AddFacultyDialog> {
   void dispose() {
     _nameController.dispose();
     _shortController.dispose();
+    _employeeIdController.dispose();
     super.dispose();
   }
 
@@ -81,6 +83,23 @@ class _AddFacultyDialogState extends State<AddFacultyDialog> {
                   }
                   return null;
                 },
+              ),
+              const SizedBox(height: 16),
+
+              // --- Employee ID ---
+              // Optional here, but it's what a faculty member types to
+              // claim this record when they register for a login. Without
+              // it their sign-up falls back to matching on name, which
+              // breaks the moment a spelling is corrected.
+              TextFormField(
+                controller: _employeeIdController,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(
+                  labelText: "Employee ID",
+                  hintText: "Used when this teacher registers a login",
+                  prefixIcon: Icon(Icons.pin_outlined),
+                  border: OutlineInputBorder(),
+                ),
               ),
               const SizedBox(height: 16),
 
@@ -140,6 +159,7 @@ class _AddFacultyDialogState extends State<AddFacultyDialog> {
               name: _nameController.text.trim(),
               shortName: _shortController.text.trim().toUpperCase(),
               designation: _selectedDesignation!,
+              employeeId: _employeeIdController.text.trim().toUpperCase(),
               active: true,
             );
 

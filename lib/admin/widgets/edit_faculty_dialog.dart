@@ -18,6 +18,7 @@ class _EditFacultyDialogState extends State<EditFacultyDialog> {
   final _formKey = GlobalKey<FormState>();
   late TextEditingController _nameController;
   late TextEditingController _shortController;
+  late TextEditingController _employeeIdController;
 
   String? _selectedDesignation;
 
@@ -33,6 +34,8 @@ class _EditFacultyDialogState extends State<EditFacultyDialog> {
     super.initState();
     _nameController = TextEditingController(text: widget.faculty.name);
     _shortController = TextEditingController(text: widget.faculty.shortName);
+    _employeeIdController =
+        TextEditingController(text: widget.faculty.employeeId);
     _selectedDesignation = widget.faculty.designation;
   }
 
@@ -40,6 +43,7 @@ class _EditFacultyDialogState extends State<EditFacultyDialog> {
   void dispose() {
     _nameController.dispose();
     _shortController.dispose();
+    _employeeIdController.dispose();
     super.dispose();
   }
 
@@ -91,6 +95,17 @@ class _EditFacultyDialogState extends State<EditFacultyDialog> {
                   }
                   return null;
                 },
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _employeeIdController,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(
+                  labelText: "Employee ID",
+                  hintText: "Used when this teacher registers a login",
+                  prefixIcon: Icon(Icons.pin_outlined),
+                  border: OutlineInputBorder(),
+                ),
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
@@ -148,6 +163,7 @@ class _EditFacultyDialogState extends State<EditFacultyDialog> {
               name: _nameController.text.trim(),
               shortName: _shortController.text.trim().toUpperCase(),
               designation: _selectedDesignation!,
+              employeeId: _employeeIdController.text.trim().toUpperCase(),
               active: true,
             );
 

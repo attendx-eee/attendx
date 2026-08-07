@@ -65,8 +65,10 @@ fixed admin account only.
    dashboard or register screen.)
 
 > Note: `.gitignore` already excludes build output; the `docs/` folder
-> (website + APK) is committed on purpose. GitHub allows files up to
-> 100 MB — a Flutter release APK (~40-60 MB) fits fine.
+> (website + APK) is committed on purpose. GitHub rejects any file over
+> **100 MB**, and rejects it at push time — by which point the file is
+> already in your commit history, so deleting it and committing again
+> doesn't help. See the build step below for why this matters.
 
 ## 2. Releasing a version (every release)
 
@@ -74,14 +76,31 @@ fixed admin account only.
    - `pubspec.yaml` → `version: 1.1.0+2`  (name + build number)
    - `lib/core/constants/app_config.dart` → `appVersionCode = 2`,
      `appVersion = '1.1.0'`
-2. Build the release APK:
+2. Build the release APK — **always with `--split-per-abi`**:
    ```
-   flutter build apk --release
+   flutter build apk --release --split-per-abi
    ```
-3. Copy it into the website folder as `attendx.apk`:
+   Plain `flutter build apk` produces a *fat* APK containing native code
+   for all three CPU architectures at once. That's ~120 MB, which
+   GitHub refuses to accept, and ~3x larger than any phone needs — a
+   device only ever runs one of the three. Splitting gives a ~45 MB APK
+   per architecture.
+
+3. Copy the arm64 build into the website folder. Every Android phone
+   from roughly 2016 onward is arm64; the armeabi-v7a and x86_64 builds
+   are only worth publishing if you actually have old or emulated
+   devices to support:
    ```
-   copy build\app\outputs\flutter-apk\app-release.apk docs\attendx.apk
+   copy build\app\outputs\flutter-apk\app-arm64-v8a-release.apk docs\attendx-v1.2.3.apk
    ```
+   Check the size before committing. If it's over ~60 MB, you built a
+   fat APK by mistake — rebuild with the flag.
+
+   > **If a push is already rejected for size:** the file is in your
+   > history, so it has to come out of the commit, not just the folder.
+   > `git reset --soft HEAD~1`, then
+   > `git restore --staged docs/<file>.apk`, delete it, rebuild
+   > correctly, and commit again.
 4. Commit & push:
    ```
    git add -A

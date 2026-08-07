@@ -1,0 +1,469 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+
+import '../../core/constants/app_config.dart';
+import '../../core/responsive/responsive.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_radius.dart';
+import '../../core/theme/app_text_styles.dart';
+import '../models/faculty_account.dart';
+
+/// Faculty sign-up.
+///
+/// Shorter than the student flow and quite different in shape: no roll
+/// number, no year or semester, and no face enrollment — a faculty
+/// member signs in with a password to mark other people's attendance,
+/// they don't check in through the gate themselves.
+///
+/// The employee ID has to match a faculty record an admin already
+/// created in Master Data. That isn't an approval step (accounts go live
+/// immediately) — it's the link that ties this login to the timetable,
+/// so the app knows which periods are theirs. It also means only people
+/// the department has actually listed as staff can create an account
+/// capable of marking a class present.
+class FacultyRegisterScreen extends StatefulWidget {
+  const FacultyRegisterScreen({super.key});
+
+  @override
+  State<FacultyRegisterScreen> createState() =>
+      _FacultyRegisterScreenState();
+}
+
+class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
+  final _formKey = GlobalKey<FormState>();
+
+  final _employeeId = TextEditingController();
+  final _name = TextEditingController();
+  final _shortName = TextEditingController();
+  final _email = TextEditingController();
+  final _mobile = TextEditingController();
+  final _password = TextEditingController();
+  final _confirm = TextEditingController();
+  final _experience = TextEditingController(text: '0');
+
+  String _designation = FacultyAccount.designations[2];
+  String _qualification = FacultyAccount.qualifications.first;
+
+  bool _obscure = true;
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    for (final c in [
+      _employeeId,
+      _name,
+      _shortName,
+      _email,
+      _mobile,
+      _password,
+      _confirm,
+      _experience,
+    ]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  /// Finds the Master Data faculty record for this employee ID.
+  ///
+  /// Matched on `employeeId` first; falls back to an exact name match
+  /// for records created before employee IDs were captured, so an
+  /// existing department doesn't have to be re-keyed before anyone can
+  /// sign up.
+  Future<QueryDocumentSnapshot<Map<String, dynamic>>?> _findFacultyRecord(
+    String employeeId,
+    String name,
+  ) async {
+    final faculty = FirebaseFirestore.instance.collection('faculty');
+
+    final byId =
+        await faculty.where('employeeId', isEqualTo: employeeId).limit(1).get();
+    if (byId.docs.isNotEmpty) return byId.docs.first;
+
+    final byName =
+        await faculty.where('name', isEqualTo: name).limit(1).get();
+    if (byName.docs.isNotEmpty) return byName.docs.first;
+
+    return null;
+  }
+
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+
+    final email = _email.text.trim().toLowerCase();
+    final employeeId = _employeeId.text.trim();
+    final name = _name.text.trim();
+
+    UserCredential? credential;
+
+    try {
+      // The auth account has to come first. Every read below is gated on
+      // being signed in (see firestore.rules), so looking the staff
+      // record up beforehand would just return permission-denied. If any
+      // later step fails, the account created here is deleted again in
+      // the catch blocks — the same rollback the student flow uses.
+      credential = await FirebaseAuth.instance
+          .createUserWithEmailAndPassword(
+        email: email,
+        password: _password.text,
+      );
+
+      final record = await _findFacultyRecord(employeeId, name);
+
+      if (record == null) {
+        await credential.user?.delete();
+        if (!mounted) return;
+        setState(() {
+          _busy = false;
+          _error = "No staff record found for employee ID \"$employeeId\". "
+              "Ask the department office to add you under Master Data → "
+              "Faculty Management first.";
+        });
+        return;
+      }
+
+      // Already claimed? Two logins pointing at one timetable identity
+      // would both see the same classes and could overwrite each other's
+      // attendance.
+      final existing = await FirebaseFirestore.instance
+          .collection('students')
+          .where('facultyId', isEqualTo: record.id)
+          .limit(1)
+          .get();
+
+      if (existing.docs.isNotEmpty) {
+        await credential.user?.delete();
+        if (!mounted) return;
+        setState(() {
+          _busy = false;
+          _error = 'An account already exists for this staff record. '
+              'Sign in instead, or contact the office.';
+        });
+        return;
+      }
+
+      final uid = credential.user!.uid;
+      final recordData = record.data();
+
+      final account = FacultyAccount(
+        uid: uid,
+        employeeId: employeeId,
+        facultyId: record.id,
+        name: name,
+        shortName: _shortName.text.trim().isEmpty
+            ? (recordData['shortName'] ?? '').toString()
+            : _shortName.text.trim(),
+        designation: _designation,
+        department: AppConfig.department,
+        qualification: _qualification,
+        experienceYears: int.tryParse(_experience.text.trim()) ?? 0,
+        email: email,
+        mobile: _mobile.text.trim(),
+      );
+
+      await FirebaseFirestore.instance
+          .collection('students')
+          .doc(uid)
+          .set(account.toMap());
+
+      // Creating the account signed them in as a side effect. Sign back
+      // out so they arrive at the login screen deliberately, rather than
+      // being dropped into the app from a form they thought only made an
+      // account.
+      await FirebaseAuth.instance.signOut();
+
+      if (!mounted) return;
+
+      Navigator.pop(context, true);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Account created. Sign in to see your classes.'),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } on FirebaseAuthException catch (e) {
+      setState(() {
+        _busy = false;
+        _error = switch (e.code) {
+          'email-already-in-use' =>
+            'That email already has an account. Sign in instead.',
+          'weak-password' => 'Choose a longer password.',
+          'invalid-email' => "That email address doesn't look right.",
+          'network-request-failed' =>
+            "Can't reach the server. Check your connection.",
+          _ => 'Could not create the account: ${e.message}',
+        };
+      });
+    } catch (e) {
+      // The auth account may exist while the profile write failed —
+      // roll it back so the email isn't left permanently taken by an
+      // account that can never sign in to anything.
+      try {
+        await credential?.user?.delete();
+      } catch (_) {
+        // Nothing more to do; the office can clear it manually.
+      }
+
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = 'Could not finish sign-up: $e';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Responsive.init(context);
+
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text('Faculty Registration'),
+        backgroundColor: AppColors.background,
+        surfaceTintColor: AppColors.background,
+        elevation: 0,
+        foregroundColor: AppColors.textPrimary,
+      ),
+      body: MaxWidthBody(
+        maxWidth: 560,
+        child: Form(
+          key: _formKey,
+          child: ListView(
+            padding: Responsive.all(20),
+            children: [
+              Text(
+                'Create a staff account',
+                style: AppTextStyles.headline,
+              ),
+              SizedBox(height: Responsive.h(6)),
+              Text(
+                'Your employee ID must already be on the department staff '
+                'list. This links your login to the classes you teach.',
+                style: AppTextStyles.caption,
+              ),
+              SizedBox(height: Responsive.h(22)),
+
+              _field(
+                controller: _employeeId,
+                label: 'Employee ID *',
+                icon: Icons.badge_outlined,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Employee ID is required'
+                    : null,
+              ),
+              _field(
+                controller: _name,
+                label: 'Full name *',
+                icon: Icons.person_outline,
+                validator: (v) => (v == null || v.trim().length < 3)
+                    ? 'Enter your full name'
+                    : null,
+              ),
+              _field(
+                controller: _shortName,
+                label: 'Initials on the timetable (e.g. KRS)',
+                icon: Icons.short_text_rounded,
+                textCapitalization: TextCapitalization.characters,
+              ),
+
+              _dropdown(
+                label: 'Designation *',
+                icon: Icons.school_outlined,
+                value: _designation,
+                items: FacultyAccount.designations,
+                onChanged: (v) => setState(() => _designation = v!),
+              ),
+              _dropdown(
+                label: 'Highest qualification *',
+                icon: Icons.workspace_premium_outlined,
+                value: _qualification,
+                items: FacultyAccount.qualifications,
+                onChanged: (v) => setState(() => _qualification = v!),
+              ),
+              _field(
+                controller: _experience,
+                label: 'Years of teaching experience',
+                icon: Icons.timeline_rounded,
+                keyboardType: TextInputType.number,
+              ),
+
+              _field(
+                controller: _email,
+                label: 'Official email *',
+                icon: Icons.mail_outline_rounded,
+                keyboardType: TextInputType.emailAddress,
+                validator: (v) {
+                  final value = (v ?? '').trim();
+                  if (value.isEmpty) return 'Email is required';
+                  if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+                      .hasMatch(value)) {
+                    return "That doesn't look like an email address";
+                  }
+                  return null;
+                },
+              ),
+              _field(
+                controller: _mobile,
+                label: 'Mobile number *',
+                icon: Icons.phone_outlined,
+                keyboardType: TextInputType.phone,
+                validator: (v) => (v == null || v.trim().length < 10)
+                    ? 'Enter a valid mobile number'
+                    : null,
+              ),
+
+              _field(
+                controller: _password,
+                label: 'Password *',
+                icon: Icons.lock_outline_rounded,
+                obscure: _obscure,
+                suffix: IconButton(
+                  icon: Icon(_obscure
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined),
+                  onPressed: () => setState(() => _obscure = !_obscure),
+                ),
+                validator: (v) => (v == null || v.length < 8)
+                    ? 'Use at least 8 characters'
+                    : null,
+              ),
+              _field(
+                controller: _confirm,
+                label: 'Confirm password *',
+                icon: Icons.lock_reset_rounded,
+                obscure: _obscure,
+                validator: (v) =>
+                    v != _password.text ? "Passwords don't match" : null,
+              ),
+
+              if (_error != null) ...[
+                SizedBox(height: Responsive.h(4)),
+                Container(
+                  padding: Responsive.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.danger.withValues(alpha: .08),
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
+                    border: Border.all(
+                        color: AppColors.danger.withValues(alpha: .3)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.error_outline_rounded,
+                          color: AppColors.danger, size: 18),
+                      SizedBox(width: Responsive.w(8)),
+                      Expanded(
+                        child: Text(_error!,
+                            style: AppTextStyles.caption
+                                .copyWith(color: AppColors.danger)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
+              SizedBox(height: Responsive.h(22)),
+              SizedBox(
+                height: 52,
+                child: ElevatedButton(
+                  onPressed: _busy ? null : _submit,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                    ),
+                  ),
+                  child: _busy
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text('Create account',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w700, fontSize: 15)),
+                ),
+              ),
+              SizedBox(height: Responsive.h(24)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _field({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    String? Function(String?)? validator,
+    TextInputType? keyboardType,
+    bool obscure = false,
+    Widget? suffix,
+    TextCapitalization textCapitalization = TextCapitalization.none,
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: Responsive.h(14)),
+      child: TextFormField(
+        controller: controller,
+        validator: validator,
+        keyboardType: keyboardType,
+        obscureText: obscure,
+        textCapitalization: textCapitalization,
+        decoration: InputDecoration(
+          labelText: label,
+          prefixIcon: Icon(icon, size: 20),
+          suffixIcon: suffix,
+          filled: true,
+          fillColor: AppColors.surface,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppRadius.sm),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _dropdown({
+    required String label,
+    required IconData icon,
+    required String value,
+    required List<String> items,
+    required ValueChanged<String?> onChanged,
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: Responsive.h(14)),
+      child: DropdownButtonFormField<String>(
+        initialValue: value,
+        isExpanded: true,
+        decoration: InputDecoration(
+          labelText: label,
+          prefixIcon: Icon(icon, size: 20),
+          filled: true,
+          fillColor: AppColors.surface,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(AppRadius.sm),
+          ),
+        ),
+        items: items
+            .map((i) => DropdownMenuItem(value: i, child: Text(i)))
+            .toList(),
+        onChanged: onChanged,
+      ),
+    );
+  }
+}

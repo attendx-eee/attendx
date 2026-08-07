@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'role_router.dart';
 import 'register_screen.dart';
 import '../admin/master_data/master_home.dart';
+import '../faculty/screens/faculty_register_screen.dart';
 import '../core/constants/app_config.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_radius.dart';
@@ -765,6 +766,42 @@ class _LoginScreenState extends State<LoginScreen> {
                               "Register here",
                               style: TextStyle(
                                 color: AppColors.primary,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      // Faculty sign-up is a separate, shorter form —
+                      // no roll number, no year, no face enrollment —
+                      // so it gets its own link rather than a role
+                      // toggle inside the student one.
+                      const SizedBox(height: 10),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Text(
+                            "Teaching staff? ",
+                            style: TextStyle(
+                                color: AppColors.textSecondary,
+                                fontSize: 14),
+                          ),
+                          GestureDetector(
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) =>
+                                      const FacultyRegisterScreen(),
+                                ),
+                              );
+                            },
+                            child: const Text(
+                              "Faculty registration",
+                              style: TextStyle(
+                                color: AppColors.teal,
                                 fontWeight: FontWeight.w700,
                                 fontSize: 14,
                               ),
