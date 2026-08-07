@@ -100,6 +100,80 @@ class ManualAttendanceService {
     );
   }
 
+  /// Marks several days at once.
+  ///
+  /// Correcting attendance is rarely a one-day job — a student is off
+  /// sick for a week, or the scanner is down for three days and the
+  /// whole class needs fixing. Doing that a day at a time is one
+  /// Firestore round trip and one notification per day; this is a single
+  /// batch and a single notification summarising the lot.
+  ///
+  /// Returns the number of days written.
+  Future<int> markMany({
+    required String uid,
+    required Map<String, dynamic> studentData,
+    required List<DateTime> dates,
+    required String status,
+    required String markerName,
+    required String markerRole,
+    String reason = '',
+  }) async {
+    if (dates.isEmpty) return 0;
+
+    final markerUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final department = AppConfig.departmentOf(studentData);
+    final year = AppConfig.yearOf(studentData);
+
+    // Firestore caps a batch at 500 writes.
+    const chunkSize = 400;
+    final sorted = [...dates]..sort();
+
+    for (var i = 0; i < sorted.length; i += chunkSize) {
+      final batch = _firestore.batch();
+
+      for (final date in sorted.skip(i).take(chunkSize)) {
+        final dateId = AppConfig.dateId(date);
+        final record = ManualAttendance(
+          id: ManualAttendance.buildId(uid, dateId),
+          uid: uid,
+          date: dateId,
+          month: ManualAttendance.monthOf(dateId),
+          department: department,
+          year: year,
+          status: status,
+          reason: reason,
+          markedBy: markerUid,
+          markedByName: markerName,
+          markedByRole: markerRole,
+        );
+
+        batch.set(_collection.doc(record.id), record.toMap());
+      }
+
+      await batch.commit();
+    }
+
+    final first = AppConfig.dateId(sorted.first);
+    final last = AppConfig.dateId(sorted.last);
+    final label = ManualAttendanceStatus.label(status).toLowerCase();
+
+    await NotificationService.instance.createNotification(
+      studentUid: uid,
+      title: 'Attendance updated for ${sorted.length} days',
+      body: sorted.length == 1
+          ? 'You were marked $label for $first by $markerName.'
+          : 'You were marked $label for ${sorted.length} days between '
+              '$first and $last by $markerName.'
+              '${reason.isEmpty ? '' : '\nReason: $reason'}',
+      category: 'attendance',
+      priority: 'high',
+      action: 'manual_attendance',
+      data: {'from': first, 'to': last, 'status': status},
+    );
+
+    return sorted.length;
+  }
+
   /// Removes a manual mark, handing the day back to the Pi's own verdict.
   Future<void> clear({
     required String uid,

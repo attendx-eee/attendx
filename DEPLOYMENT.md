@@ -117,13 +117,25 @@ Create/update the Firestore document **`app_meta/android`**:
 |---------------------|---------|------------------------------------------------------|
 | `latestVersionCode` | number  | `3`  (must be > the code users currently have)       |
 | `latestVersion`     | string  | `"1.2.0"`                                            |
-| `apkUrl`            | string  | `"https://<YOUR_USERNAME>.github.io/attendx/attendx.apk"` |
+| `apkUrl`            | string  | `"https://ganga2006.github.io/attendx/attendx-v1.2.3.apk"` |
 | `forceUpdate`       | boolean | `false` (set `true` to block old versions entirely)  |
 | `notes`             | string  | `"CR batch labs + daily digest notifications"`       |
 
 At the next app open, the login screen shows the "Update Available"
 dialog with an **Update Now** button that downloads the new APK from
 your site. With `forceUpdate: true` the dialog cannot be dismissed.
+
+> **`apkUrl` must include the version in the filename.** The APKs in
+> `docs/` are named `attendx-v1.2.3.apk`, not `attendx.apk` — the app
+> opens this string verbatim, so a filename that doesn't exist gives
+> everyone a 404 on the Update button.
+>
+> Before saving, paste the URL into a browser. If it downloads, the
+> button works; if you get a 404, fix it here rather than in the app.
+>
+> Update `apkUrl` **after** the push has finished and GitHub Pages has
+> rebuilt (a minute or two). Bumping `latestVersionCode` first points
+> every installed app at a file that isn't live yet.
 
 Security rules: allow public **read** on `app_meta` (the check runs
 before sign-in); writes admin-only.

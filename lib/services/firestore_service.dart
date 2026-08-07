@@ -152,6 +152,10 @@ class FirestoreService {
     await _deleteWhere(collection: 'attendance_events', field: 'uid', uid: uid);
     await _deleteWhere(
         collection: 'notifications', field: 'studentUid', uid: uid);
+    // Manual corrections are attendance data about this person too —
+    // leaving them behind would keep a deleted student's record alive in
+    // every monthly report.
+    await _deleteWhere(collection: 'attendance_manual', field: 'uid', uid: uid);
 
     final batch = _firestore.batch();
     batch.delete(_firestore.collection('student_face_enrollments').doc(uid));

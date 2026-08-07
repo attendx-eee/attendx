@@ -29,6 +29,16 @@ enum ScanBin {
         ScanBin.up => 'Up',
         ScanBin.down => 'Down',
       };
+
+  /// The key this bin is stored under in Firestore.
+  ///
+  /// Centre is written as `front` to match what every earlier enrollment
+  /// used. Matching itself iterates whatever keys it finds, so the name
+  /// is irrelevant there — but other code has looked for `front` by name
+  /// to decide whether a face is enrolled at all, and inventing a new
+  /// vocabulary silently broke it. Keeping the shared name costs nothing
+  /// and avoids a whole class of bug.
+  String get storageKey => this == ScanBin.centre ? 'front' : name;
 }
 
 /// One accepted frame: its embedding and what it scored.
@@ -79,11 +89,35 @@ enum ScanFeedback {
 ///   the best few, spread across frontal and profile views, recovers
 ///   most of the available accuracy. Hence per-bin best-K rather than
 ///   "the first K that passed".
+/// How thorough a scan needs to be.
+///
+/// Students are matched by a camera at the door and, from this release,
+/// by a phone sweeping a classroom — at distance, at whatever angle they
+/// happen to be sitting. That demands a wide template.
+///
+/// Staff are only ever matched one-to-one, close up, having deliberately
+/// presented themselves to confirm who they are. A frontal template is
+/// enough for that, and asking a lecturer to sweep their head through
+/// seven positions for a convenience feature is a good way to have them
+/// not bother.
+enum ScanProfile {
+  /// Seven angle bins, ~15 frames. Used for students.
+  full,
+
+  /// Frontal only, but more of it — six good frames instead of four,
+  /// since there's no angular spread to lend the template variety.
+  frontalOnly,
+}
+
 class ScanHarvester {
+  final ScanProfile profile;
+
+  ScanHarvester({this.profile = ScanProfile.full});
+
   /// How many frames to keep per bin. Small on purpose — these are the
   /// best of potentially hundreds, and a bin's second-best frame is
   /// already very close to its best.
-  static const Map<ScanBin, int> targets = {
+  static const Map<ScanBin, int> _fullTargets = {
     ScanBin.centre: 4,
     ScanBin.left: 2,
     ScanBin.farLeft: 2,
@@ -93,14 +127,22 @@ class ScanHarvester {
     ScanBin.down: 2,
   };
 
+  static const Map<ScanBin, int> _frontalTargets = {ScanBin.centre: 6};
+
+  Map<ScanBin, int> get targets =>
+      profile == ScanProfile.full ? _fullTargets : _frontalTargets;
+
   /// Bins the scan cannot finish without. The extremes are desirable but
   /// optional: some people simply won't turn far enough, and refusing to
   /// enroll them over it is worse than a slightly narrower template.
-  static const Set<ScanBin> requiredBins = {
+  static const Set<ScanBin> _fullRequired = {
     ScanBin.centre,
     ScanBin.left,
     ScanBin.right,
   };
+
+  Set<ScanBin> get requiredBins =>
+      profile == ScanProfile.full ? _fullRequired : const {ScanBin.centre};
 
   /// Above this cosine similarity a frame is the same frame again — the
   /// head barely moved between captures. Keeping both would weight the
@@ -213,7 +255,10 @@ class ScanHarvester {
       }
     }
 
-    final target = targets[bin]!;
+    // A frontal-only profile has no target for the side bins, so frames
+    // from those angles are simply not wanted.
+    final target = targets[bin] ?? 0;
+    if (target == 0) return ScanFeedback.outOfRange;
 
     if (samples.length < target) {
       samples.add(
@@ -239,9 +284,13 @@ class ScanHarvester {
     return ScanFeedback.redundant;
   }
 
-  /// 0-1 completion for a bin.
-  double progressFor(ScanBin bin) =>
-      (_bins[bin]!.length / targets[bin]!).clamp(0.0, 1.0);
+  /// 0-1 completion for a bin. Bins this profile doesn't collect read as
+  /// complete, so they never hold up progress.
+  double progressFor(ScanBin bin) {
+    final target = targets[bin] ?? 0;
+    if (target == 0) return 1;
+    return (_bins[bin]!.length / target).clamp(0.0, 1.0);
+  }
 
   /// 0-1 across every required bin — what the progress ring shows.
   double get progress {
@@ -252,7 +301,8 @@ class ScanHarvester {
     return (filled / requiredBins.length).clamp(0.0, 1.0);
   }
 
-  bool isBinComplete(ScanBin bin) => _bins[bin]!.length >= targets[bin]!;
+  bool isBinComplete(ScanBin bin) =>
+      _bins[bin]!.length >= (targets[bin] ?? 0);
 
   /// Every required bin has its quota.
   bool get hasRequiredCoverage => requiredBins.every(isBinComplete);
@@ -262,7 +312,10 @@ class ScanHarvester {
   List<ScanBin> get outstandingBins {
     final required = requiredBins.where((b) => !isBinComplete(b)).toList();
     final optional = ScanBin.values
-        .where((b) => !requiredBins.contains(b) && !isBinComplete(b))
+        .where((b) =>
+            (targets[b] ?? 0) > 0 &&
+            !requiredBins.contains(b) &&
+            !isBinComplete(b))
         .toList();
     return [...required, ...optional];
   }
@@ -302,7 +355,7 @@ class ScanHarvester {
       // ones.
       final sorted = [...samples]
         ..sort((a, b) => b.quality.score.compareTo(a.quality.score));
-      out[bin.name] = sorted.map((s) => s.embedding).toList();
+      out[bin.storageKey] = sorted.map((s) => s.embedding).toList();
     });
     return out;
   }
@@ -353,7 +406,7 @@ class ScanHarvester {
     _bins.forEach((bin, samples) {
       if (samples.isEmpty) return;
       final fused = weightedFuse(samples);
-      if (fused.isNotEmpty) out[bin.name] = fused;
+      if (fused.isNotEmpty) out[bin.storageKey] = fused;
     });
     return out;
   }

@@ -75,6 +75,17 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
   Map<int, DayVerdict>? _verdicts;
   String? _verdictKey;
 
+  /// Days picked out for a single bulk action, by day-of-month.
+  ///
+  /// Empty means normal mode: tapping a day opens its sheet. Non-empty
+  /// means selection mode, entered by long-pressing any day — tapping
+  /// then adds and removes days instead, and one status is applied to
+  /// all of them at once. Marking a week of medical leave shouldn't be
+  /// seven sheets, seven writes and seven notifications.
+  final Set<int> _selectedDays = {};
+
+  bool get _selecting => _selectedDays.isNotEmpty;
+
   @override
   void initState() {
     super.initState();
@@ -115,6 +126,9 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
       // Drop the old month's grid rather than showing it under the new
       // month's heading for a frame — a brief spinner beats wrong data.
       _verdicts = null;
+      // Selections are day-of-month numbers, so carrying them across a
+      // month boundary would silently retarget them at different dates.
+      _selectedDays.clear();
     });
   }
 
@@ -180,6 +194,132 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  /// Applies one status to every selected day.
+  Future<void> _markSelected(String status, String reason) async {
+    final verdicts = _verdicts;
+    if (verdicts == null || _selectedDays.isEmpty) return;
+
+    final dates = _selectedDays
+        .map((d) => verdicts[d]?.date)
+        .whereType<DateTime>()
+        .toList();
+
+    if (dates.isEmpty) return;
+
+    setState(() => _saving = true);
+
+    try {
+      final count = await ManualAttendanceService.instance.markMany(
+        uid: widget.studentUid,
+        studentData: widget.studentData,
+        dates: dates,
+        status: status,
+        markerName: widget.marker.name,
+        markerRole: widget.marker.role,
+        reason: reason,
+      );
+
+      if (mounted) {
+        setState(_selectedDays.clear);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$count day${count == 1 ? '' : 's'} marked '
+                '${ManualAttendanceStatus.label(status).toLowerCase()} '
+                'for $_studentName.'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: AppColors.success,
+          ),
+        );
+      }
+    } catch (e) {
+      _showError("Couldn't save those days: $e");
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Asks for an optional reason, then applies [status] to the selection.
+  Future<void> _confirmBulk(String status) async {
+    final reasonController = TextEditingController();
+    final count = _selectedDays.length;
+
+    final go = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            backgroundColor: AppColors.surface,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+            ),
+            title: Text(
+              'Mark $count day${count == 1 ? '' : 's'} '
+              '${ManualAttendanceStatus.label(status).toLowerCase()}',
+              style: AppTextStyles.title,
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'This replaces whatever those days currently show for '
+                  '$_studentName, and notifies them once.',
+                  style: AppTextStyles.caption,
+                ),
+                SizedBox(height: Responsive.h(16)),
+                TextField(
+                  controller: reasonController,
+                  decoration: InputDecoration(
+                    labelText: 'Reason (optional)',
+                    hintText: 'Medical leave, on duty, scanner down…',
+                    hintStyle: AppTextStyles.caption,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Back',
+                    style: TextStyle(color: AppColors.textSecondary)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppRadius.xs),
+                  ),
+                ),
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: Text('Mark $count'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (go) await _markSelected(status, reasonController.text.trim());
+  }
+
+  /// Selects every markable day in the visible month that has a class.
+  void _selectAllClassDays() {
+    final verdicts = _verdicts;
+    if (verdicts == null) return;
+
+    setState(() {
+      _selectedDays
+        ..clear()
+        ..addAll(verdicts.entries
+            .where((e) =>
+                e.value.status != DayStatus.noClass &&
+                e.value.status != DayStatus.upcoming)
+            .map((e) => e.key));
+    });
   }
 
   Future<void> _clear(DayVerdict verdict) async {
@@ -568,6 +708,10 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
               _buildSummary(verdicts),
               SizedBox(height: Responsive.h(14)),
               _buildCalendar(verdicts, canMark),
+              if (_selecting && canMark) ...[
+                SizedBox(height: Responsive.h(14)),
+                _buildSelectionBar(),
+              ],
               SizedBox(height: Responsive.h(14)),
               _buildLegend(),
             ],
@@ -786,9 +930,11 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            canMark
-                ? "Tap a day to mark attendance"
-                : "Read-only — you can't mark this month",
+            !canMark
+                ? "Read-only — you can't mark this month"
+                : _selecting
+                    ? "Tap days to add or remove them"
+                    : "Tap a day to mark it • long-press to select several",
             style: AppTextStyles.caption,
           ),
           SizedBox(height: Responsive.h(14)),
@@ -829,9 +975,102 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
                 verdict: verdict,
                 isToday: isToday,
                 enabled: markable,
-                onTap: () => _openDaySheet(verdict, markable),
+                selected: _selectedDays.contains(day),
+                onTap: () {
+                  if (_selecting) {
+                    // In selection mode a tap adds or removes, so days
+                    // can be picked out one by one without the sheet
+                    // interrupting every time.
+                    if (!markable) return;
+                    setState(() {
+                      if (!_selectedDays.remove(day)) _selectedDays.add(day);
+                    });
+                    return;
+                  }
+                  _openDaySheet(verdict, markable);
+                },
+                onLongPress: markable
+                    ? () => setState(() => _selectedDays.add(day))
+                    : null,
               );
             },
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The bar that appears once days are selected.
+  Widget _buildSelectionBar() {
+    final count = _selectedDays.length;
+
+    return Container(
+      padding: Responsive.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: AppColors.primary.withValues(alpha: .35)),
+        boxShadow: const [
+          BoxShadow(
+              color: AppColors.shadow, blurRadius: 16, offset: Offset(0, 6)),
+        ],
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Icon(Icons.check_circle_outline_rounded,
+                  size: Responsive.sp(18), color: AppColors.primary),
+              SizedBox(width: Responsive.w(8)),
+              Expanded(
+                child: Text(
+                  '$count day${count == 1 ? '' : 's'} selected',
+                  style: AppTextStyles.title
+                      .copyWith(fontSize: Responsive.sp(14)),
+                ),
+              ),
+              TextButton(
+                onPressed: _selectAllClassDays,
+                child: const Text('All class days'),
+              ),
+              TextButton(
+                onPressed: () => setState(_selectedDays.clear),
+                child: const Text('Cancel',
+                    style: TextStyle(color: AppColors.textSecondary)),
+              ),
+            ],
+          ),
+          SizedBox(height: Responsive.h(10)),
+          Row(
+            children: [
+              Expanded(
+                child: _StatusButton(
+                  label: 'Present',
+                  color: AppColors.success,
+                  selected: false,
+                  onTap: () =>
+                      _confirmBulk(ManualAttendanceStatus.present),
+                ),
+              ),
+              SizedBox(width: Responsive.w(10)),
+              Expanded(
+                child: _StatusButton(
+                  label: 'Late',
+                  color: AppColors.warning,
+                  selected: false,
+                  onTap: () => _confirmBulk(ManualAttendanceStatus.late),
+                ),
+              ),
+              SizedBox(width: Responsive.w(10)),
+              Expanded(
+                child: _StatusButton(
+                  label: 'Absent',
+                  color: AppColors.danger,
+                  selected: false,
+                  onTap: () => _confirmBulk(ManualAttendanceStatus.absent),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -987,14 +1226,18 @@ class _DayCell extends StatelessWidget {
   final DayVerdict verdict;
   final bool isToday;
   final bool enabled;
+  final bool selected;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   const _DayCell({
     required this.day,
     required this.verdict,
     required this.isToday,
     required this.enabled,
+    required this.selected,
     required this.onTap,
+    required this.onLongPress,
   });
 
   @override
@@ -1012,15 +1255,20 @@ class _DayCell extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(Responsive.radius(10)),
         onTap: onTap,
+        onLongPress: onLongPress,
         child: Opacity(
           opacity: enabled ? 1 : .65,
           child: Container(
             decoration: BoxDecoration(
               color: fill,
               borderRadius: BorderRadius.circular(Responsive.radius(10)),
+              // A selected day gets a heavy blue ring, which reads over
+              // any of the status fills underneath it.
               border: Border.all(
-                color: isToday ? AppColors.primary : AppColors.divider,
-                width: isToday ? 2 : 1,
+                color: selected
+                    ? AppColors.primary
+                    : (isToday ? AppColors.primary : AppColors.divider),
+                width: selected ? 3 : (isToday ? 2 : 1),
               ),
             ),
             child: Stack(

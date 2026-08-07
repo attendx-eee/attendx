@@ -9,6 +9,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'dart:async';
 
 import '../models/face_enrollment_imports.dart';
+import '../services/enrollment/scan_coach.dart';
 import '../services/enrollment/scan_guide.dart';
 import '../services/enrollment/scan_harvester.dart';
 import '../services/profile_photo_service.dart';
@@ -35,11 +36,21 @@ class FaceEnrollmentScreen extends StatefulWidget {
   /// to Cloud Storage once enrollment succeeds.
   final File? pendingPhoto;
 
+  /// How thorough the scan needs to be.
+  ///
+  /// Students default to the full seven-angle sweep, because they're
+  /// matched at a distance by the door camera and by classroom scans.
+  /// Staff pass [ScanProfile.frontalOnly] — they're only ever matched
+  /// close up and on purpose, so a good frontal template is enough and
+  /// a seven-position sweep is friction for no benefit.
+  final ScanProfile scanProfile;
+
   const FaceEnrollmentScreen({
     super.key,
     this.mandatory = false,
     this.pendingProfile,
     this.pendingPhoto,
+    this.scanProfile = ScanProfile.full,
   }) : assert(
           !mandatory || pendingProfile != null,
           'pendingProfile is required when mandatory is true',
@@ -80,7 +91,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen> {
   /// tracks "which frames, out of every one the camera has produced, are
   /// the best representatives of each angle" — a question the student
   /// never has to participate in answering.
-  final ScanHarvester _harvester = ScanHarvester();
+  late final ScanHarvester _harvester =
+      ScanHarvester(profile: widget.scanProfile);
 
   /// Decides what the student is asked to do next.
   final ScanGuide _guide = ScanGuide();
@@ -89,6 +101,14 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen> {
   /// pre-check and handed to the scorer once the crop exists.
   double _lastOccupancy = 0;
   double _lastCenterOffset = 0;
+
+  /// Decides the single coaching line, with hysteresis so it doesn't
+  /// change faster than anyone can read it.
+  final ScanCoach _coach = ScanCoach();
+
+  /// What the coach currently wants to say. Empty when nothing's wrong,
+  /// in which case the sweep instruction shows instead.
+  CoachIssue _issue = CoachIssue.noFace;
 
   /// When the required bins filled. Optional far-angle bins get this
   /// long to fill before the scan closes itself.
@@ -260,19 +280,15 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
 
       final faces = await faceDetectionService.detector.processImage(inputImage);
 
-      if (faces.isEmpty) {
+      if (faces.length != 1) {
+        _issue = _coach.update(faces.isEmpty
+            ? CoachIssue.noFace
+            : CoachIssue.multipleFaces);
         _setFlowState(
           EnrollmentFlowState.waitingForFace,
-          "Position your face inside the guide",
+          ScanCoach.message(_issue),
         );
-        return;
-      }
-
-      if (faces.length > 1) {
-        _setFlowState(
-          EnrollmentFlowState.waitingForFace,
-          "Only one face should be visible",
-        );
+        if (mounted) setState(() => _detectedFaceRect = null);
         return;
       }
 
@@ -333,6 +349,29 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
         });
       }
 
+      // ---------- Coaching ----------
+      //
+      // Everything measurable without encoding the frame is diagnosed
+      // here, and the coach decides whether it's worth saying. Anything
+      // blocking stops the frame before the expensive crop-and-embed
+      // step: there is no point spending 100ms on a face that's half
+      // out of shot.
+      _issue = _coach.update(ScanCoach.diagnose(
+        faceCount: 1,
+        faceBox: face.boundingBox,
+        frame: Size(cameraImage.width.toDouble(),
+            cameraImage.height.toDouble()),
+        brightness: null, // measured on the crop, fed in below
+        occupancy: _lastOccupancy,
+        centerOffset: _lastCenterOffset,
+        roll: face.headEulerAngleZ,
+        minOccupancy: QualityThresholds.minFaceOccupancy,
+        maxOccupancy: QualityThresholds.maxFaceOccupancy,
+        minBrightness: QualityThresholds.minBrightness,
+        maxBrightness: QualityThresholds.maxBrightness,
+        maxRoll: QualityThresholds.maxRoll,
+      ));
+
       // ---------- Liveness, once, before any frame is kept ----------
       //
       // Still a blink, still up front — but it now gates the whole scan
@@ -377,14 +416,25 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
         faceDetected: true,
       );
 
+      // A problem outranks the instruction. Telling someone to turn
+      // their head while the camera can't see them is worse than
+      // useless — it makes the app look like it isn't listening.
       _setFlowState(
-        EnrollmentFlowState.capturing,
-        ScanGuide.title(_guide.phase),
+        _coach.isBlocked
+            ? EnrollmentFlowState.aligningFace
+            : EnrollmentFlowState.capturing,
+        _coach.isBlocked
+            ? ScanCoach.message(_issue)
+            : ScanGuide.title(_guide.phase),
       );
 
-      if (phaseChanged) {
+      if (phaseChanged && !_coach.isBlocked) {
         HapticFeedback.selectionClick();
       }
+
+      // Don't spend a crop and an embedding on a frame already known to
+      // be unusable.
+      if (_coach.isBlocked) return;
 
       await _harvestFrame(cameraImage, face);
 
@@ -537,12 +587,19 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
 
       if (!mounted) return;
 
-      // Only the two states a student can act on reach the screen.
-      // Narrating every redundant or duplicate frame would produce text
-      // that changes several times a second and says nothing.
+      // Coaching is kept separate from the instruction. The instruction
+      // ("turn your head left") is what to do; the hint ("find brighter
+      // light") is why nothing is being captured while they do it.
+      // Writing the hint into the status line meant the next frame
+      // immediately overwrote it, so the one message a student actually
+      // needed flickered past several times a second and never stayed
+      // long enough to read.
+      // Blur is only measurable once the crop exists, so it's fed to the
+      // coach here rather than in the cheap pre-check. Everything else
+      // was diagnosed before this frame was ever encoded.
       if (feedback == ScanFeedback.poorQuality &&
-          _harvester.lastFailure != null) {
-        _updateStatus(_harvester.lastFailure!);
+          quality.failures.contains('Hold steady')) {
+        _issue = _coach.update(CoachIssue.tooBlurry);
       }
 
       setState(() {}); // repaint the progress ring
@@ -620,6 +677,8 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
     _harvester.reset();
     _guide.reset();
     _optionalGraceStarted = null;
+    _coach.reset();
+    _issue = CoachIssue.noFace;
     _flowState = EnrollmentFlowState.warmingUp;
     _resetBlinkState();
     setState(() {
@@ -821,6 +880,103 @@ Future<void> _uploadEmbeddingsToFirebase() async {
   /// saved (see FaceEnrollmentScreen doc comment), so there's nothing to
   /// "skip enrollment and finish later" — the account itself is rolled
   /// back instead, so the same email can be used to register again.
+  /// What "back" means during required enrollment.
+  ///
+  /// Three honest choices rather than a dead button: carry on, start the
+  /// scan over (the common case — the light was wrong, or they moved too
+  /// fast), or abandon registration altogether. Only the last one is
+  /// destructive, and it says so.
+  Future<void> _offerExitOptions() async {
+    if (!mounted) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.black12,
+                    borderRadius: BorderRadius.circular(100),
+                  ),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 6),
+                child: Text(
+                  'Face setup is part of registration',
+                  style:
+                      TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 6),
+                child: Text(
+                  "Your account isn't saved until the scan finishes.",
+                  style: TextStyle(fontSize: 13, color: Colors.black54),
+                ),
+              ),
+              const SizedBox(height: 14),
+              ListTile(
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                leading: const Icon(Icons.play_arrow_rounded,
+                    color: Colors.blueAccent),
+                title: const Text('Continue the scan',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+                onTap: () => Navigator.pop(sheetContext),
+              ),
+              ListTile(
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                leading: const Icon(Icons.refresh_rounded,
+                    color: Colors.orange),
+                title: const Text('Start the scan again',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: const Text(
+                    'Clears what was captured and begins from the start',
+                    style: TextStyle(fontSize: 12)),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _resetForManualRetry();
+                },
+              ),
+              ListTile(
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                leading: const Icon(Icons.logout_rounded, color: Colors.red),
+                title: const Text('Cancel registration',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600, color: Colors.red)),
+                subtitle: const Text(
+                    'Deletes the account so you can sign up again later',
+                    style: TextStyle(fontSize: 12)),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _cancelRegistration();
+                },
+              ),
+              const SizedBox(height: 6),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _cancelRegistration() async {
     final confirm = await showDialog<bool>(
           context: context,
@@ -916,9 +1072,26 @@ Future<void> _uploadEmbeddingsToFirebase() async {
 
     return PopScope(
       canPop: !widget.mandatory,
+      // Pressing back during required enrollment used to do nothing at
+      // all — the gesture was swallowed and the student was stuck on a
+      // screen with no visible way out, which reads as the app having
+      // frozen. Registration genuinely can't be half-finished, so back
+      // still doesn't pop; it now asks what they meant instead.
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop || !widget.mandatory) return;
+        _offerExitOptions();
+      },
       child: Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: !widget.mandatory,
+        actions: [
+          if (widget.mandatory)
+            IconButton(
+              tooltip: 'Options',
+              icon: const Icon(Icons.more_vert_rounded),
+              onPressed: _offerExitOptions,
+            ),
+        ],
         title: Text(widget.mandatory
             ? "Enroll Your Face (Required)"
             : "Biometric Asset Enrollment"),
@@ -1044,6 +1217,25 @@ Future<void> _uploadEmbeddingsToFirebase() async {
                           ],
                         ),
 
+                        // Coaching line. Amber, iconed and distinct from
+                        // the instruction above it, because it answers a
+                        // different question: not "what should I do" but
+                        // "why is nothing happening".
+                        if (_coach.isBlocked &&
+                            !_hasEnrollmentFailed &&
+                            !_isSaving) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            ScanCoach.detail(_issue),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.amber,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+
                         // Live scan progress. Shows how much of the sweep
                         // is covered, not how many photos have been
                         // taken — the student is never asked to think in
@@ -1143,7 +1335,12 @@ class _ScanBinStrip extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: _order.map((bin) {
-        final required = ScanHarvester.requiredBins.contains(bin);
+        final required = harvester.requiredBins.contains(bin);
+        // Bins this profile doesn't collect (staff scans skip the side
+        // angles) shouldn't appear as pips waiting to be filled.
+        if ((harvester.targets[bin] ?? 0) == 0) {
+          return const SizedBox.shrink();
+        }
         final progress = harvester.progressFor(bin);
         final complete = harvester.isBinComplete(bin);
 

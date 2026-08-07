@@ -1,38 +1,215 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
+    Replaced at build time by the --base-href argument. For the admin
+    console this is /attendx/admin/ — see .github/workflows.
   -->
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description"
+        content="AttendX admin console — attendance analysis, approvals and master data for the EEE department.">
 
-  <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="attendx">
+  <meta name="apple-mobile-web-app-title" content="AttendX Admin">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
-  <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>attendx</title>
+  <title>AttendX Admin</title>
   <link rel="manifest" href="manifest.json">
+
+  <style>
+    :root {
+      --brand: #2563EB;
+      --brand-teal: #14C4B8;
+      --bg: #F5F7FB;
+      --text: #111827;
+      --muted: #6B7280;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                   Ubuntu, sans-serif;
+      color: var(--text);
+    }
+
+    /* ---------------------------------------------------------------
+       Boot screen.
+
+       A Flutter web build shows nothing at all until the engine and the
+       app bundle have downloaded — several seconds on a first visit
+       over a slow connection. Without this the admin stares at a blank
+       white page and reasonably concludes the site is broken.
+       Removed by the bootstrap script once Flutter paints.
+       --------------------------------------------------------------- */
+    #boot {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      background: var(--bg);
+      z-index: 9999;
+      transition: opacity .35s ease;
+    }
+
+    #boot.done { opacity: 0; pointer-events: none; }
+
+    .boot-mark {
+      width: 62px;
+      height: 62px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--brand), var(--brand-teal));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 30px;
+      font-weight: 700;
+      box-shadow: 0 10px 28px rgba(37, 99, 235, .28);
+    }
+
+    .boot-title { font-size: 17px; font-weight: 700; }
+    .boot-sub { font-size: 13px; color: var(--muted); }
+
+    .boot-bar {
+      width: 190px;
+      height: 3px;
+      border-radius: 99px;
+      background: #E5E7EB;
+      overflow: hidden;
+    }
+
+    .boot-bar span {
+      display: block;
+      height: 100%;
+      width: 40%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, var(--brand), var(--brand-teal));
+      animation: slide 1.1s ease-in-out infinite;
+    }
+
+    @keyframes slide {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(350%); }
+    }
+
+    /* ---------------------------------------------------------------
+       Install button.
+
+       Chrome and Edge fire `beforeinstallprompt` when a site meets the
+       installability bar. Handled here in plain JS rather than through
+       Dart interop: the event fires before Flutter has finished booting,
+       so it has to be captured at the page level or it's simply missed.
+       --------------------------------------------------------------- */
+    #install {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 9998;
+      display: none;
+      align-items: center;
+      gap: 9px;
+      padding: 11px 17px;
+      border: 0;
+      border-radius: 12px;
+      background: #fff;
+      color: var(--brand);
+      font-size: 13.5px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      box-shadow: 0 8px 26px rgba(17, 24, 39, .16);
+      transition: transform .15s ease, box-shadow .15s ease;
+    }
+
+    #install:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 12px 30px rgba(17, 24, 39, .2);
+    }
+
+    #install svg { width: 17px; height: 17px; }
+
+    /* On a phone the button would sit on top of the app's own controls,
+       and installing a desktop console there isn't the point. */
+    @media (max-width: 700px) {
+      #install { display: none !important; }
+    }
+  </style>
 </head>
 <body>
+  <div id="boot">
+    <div class="boot-mark">A</div>
+    <div class="boot-title">AttendX Admin</div>
+    <div class="boot-sub">Loading the console…</div>
+    <div class="boot-bar"><span></span></div>
+  </div>
+
+  <button id="install" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+      <polyline points="7 10 12 15 17 10"></polyline>
+      <line x1="12" y1="15" x2="12" y2="3"></line>
+    </svg>
+    Install to desktop
+  </button>
+
+  <script>
+    (function () {
+      var deferred = null;
+      var button = document.getElementById('install');
+
+      window.addEventListener('beforeinstallprompt', function (e) {
+        // Chrome shows its own mini-infobar by default; suppressing it
+        // lets the prompt appear when the admin asks for it instead.
+        e.preventDefault();
+        deferred = e;
+        button.style.display = 'flex';
+      });
+
+      button.addEventListener('click', function () {
+        if (!deferred) return;
+        deferred.prompt();
+        deferred.userChoice.finally(function () {
+          // The event is single-use — once prompted it can't be reused,
+          // so the button goes away either way.
+          deferred = null;
+          button.style.display = 'none';
+        });
+      });
+
+      // Already installed, or just installed: nothing left to offer.
+      window.addEventListener('appinstalled', function () {
+        deferred = null;
+        button.style.display = 'none';
+      });
+
+      if (window.matchMedia('(display-mode: standalone)').matches) {
+        button.style.display = 'none';
+      }
+
+      // Flutter signals first paint. Fade the boot screen rather than
+      // cutting it, so the handover doesn't flash.
+      window.addEventListener('flutter-first-frame', function () {
+        var boot = document.getElementById('boot');
+        boot.classList.add('done');
+        setTimeout(function () { boot.remove(); }, 400);
+      });
+    })();
+  </script>
+
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

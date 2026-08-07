@@ -63,7 +63,16 @@ Rules the Pi must follow:
 ## 2. Collections the Pi READS from (read-only!)
 
 - `student_face_enrollments/{uid}` — face templates:
-  - `embeddings`: map of pose → 192-float array (`front`, `left`, `right`, `up`, `down`)
+  - `embeddings`: map of pose → 192-float array.
+    **Iterate the map — never hardcode the key names.** Enrollment used
+    to write exactly five (`front`, `left`, `right`, `up`, `down`); the
+    scanning enrollment added `farLeft` and `farRight`, and may add more.
+    `front` is still always present, and a staff template may contain
+    only that one. Code that looked for specific keys is how the app's
+    own face verification broke.
+  - `quality` (v3+): `{meanQuality, sampleCount, binsCovered, band}` —
+    the enrollment scorecard. Useful for spotting thin templates before
+    they start failing at the gate; not needed for matching.
   - `centroid`: fused 192-float array — **match against this first** (cheapest),
     fall back to per-pose for the top candidates (same logic as the app's
     `AdaptiveFaceService`: cosine similarity, accept ≥ 0.75, require a

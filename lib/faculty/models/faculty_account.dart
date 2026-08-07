@@ -15,13 +15,23 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 class FacultyAccount {
   final String uid;
 
-  /// College-issued staff number. The link to the Master Data faculty
-  /// record, and what stops someone claiming to teach a class they
-  /// don't.
+  /// College-issued staff number. Recorded for the admin's benefit when
+  /// they review the request; nothing keys off it.
   final String employeeId;
 
-  /// Document id in the `faculty` collection this account claims.
+  /// Document id in the `faculty` collection this account is tied to.
+  ///
+  /// Empty until an admin approves the account and picks which timetable
+  /// record it belongs to. That link is what makes "my classes" work —
+  /// periods name a facultyId, not a person — so an unapproved account
+  /// has no classes to show and nothing it could mark.
   final String facultyId;
+
+  /// 'pending' | 'approved' | 'rejected'
+  final String status;
+
+  /// Admin's note when rejecting.
+  final String decisionNote;
 
   final String name;
 
@@ -49,10 +59,16 @@ class FacultyAccount {
 
   final Timestamp? createdAt;
 
+  static const String pending = 'pending';
+  static const String approved = 'approved';
+  static const String rejected = 'rejected';
+
   const FacultyAccount({
     required this.uid,
     required this.employeeId,
-    required this.facultyId,
+    this.facultyId = '',
+    this.status = pending,
+    this.decisionNote = '',
     required this.name,
     required this.shortName,
     required this.designation,
@@ -92,6 +108,8 @@ class FacultyAccount {
       uid: uid,
       employeeId: (map['employeeId'] ?? '').toString(),
       facultyId: (map['facultyId'] ?? '').toString(),
+      status: (map['facultyStatus'] ?? pending).toString(),
+      decisionNote: (map['decisionNote'] ?? '').toString(),
       name: (map['name'] ?? '').toString(),
       shortName: (map['shortName'] ?? '').toString(),
       designation: (map['designation'] ?? '').toString(),
@@ -109,6 +127,11 @@ class FacultyAccount {
         'uid': uid,
         'employeeId': employeeId,
         'facultyId': facultyId,
+        // Named `facultyStatus` rather than `status` because these docs
+        // share the `students` collection, where `status` is already
+        // spoken for by other flows.
+        'facultyStatus': status,
+        'decisionNote': decisionNote,
         'name': name,
         'shortName': shortName,
         'designation': designation,
@@ -124,4 +147,8 @@ class FacultyAccount {
         'role': 'faculty',
         'createdAt': createdAt ?? FieldValue.serverTimestamp(),
       };
+
+  bool get isApproved => status == approved && facultyId.isNotEmpty;
+  bool get isPending => status == pending;
+  bool get isRejected => status == rejected;
 }

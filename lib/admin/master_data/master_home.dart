@@ -24,6 +24,7 @@ import '../screens/attendance_analysis_screen.dart';
 import '../screens/attendance_insights_screen.dart';
 import '../screens/attendance_permission_screen.dart';
 import '../screens/batch_screen.dart';
+import '../screens/faculty_approval_screen.dart';
 import '../widgets/admin_hero_header.dart';
 import '../widgets/master_tile.dart';
 
@@ -50,6 +51,19 @@ class MasterHome extends StatelessWidget {
       .where(field, isEqualTo: 'pending')
       .snapshots()
       .map((snap) => snap.docs.length);
+
+  /// Staff who have signed up but aren't approved yet.
+  ///
+  /// Filtered client-side rather than with a second `where`: a compound
+  /// query on role plus facultyStatus needs a composite index, and this
+  /// list is a handful of documents.
+  Stream<int> _pendingFacultyCount() => FirebaseFirestore.instance
+      .collection('students')
+      .where('role', isEqualTo: 'faculty')
+      .snapshots()
+      .map((snap) => snap.docs
+          .where((d) => (d.data()['facultyStatus'] ?? 'pending') == 'pending')
+          .length);
 
   /// Guard against accidental logout — always confirm first.
   Future<void> _confirmLogout(BuildContext context) async {
@@ -204,6 +218,19 @@ class MasterHome extends StatelessWidget {
             subtitle: "Requests waiting on a decision",
           ),
           SizedBox(height: Responsive.h(14)),
+
+          StreamBuilder<int>(
+            stream: _pendingFacultyCount(),
+            builder: (context, snapshot) => MasterTile(
+              icon: Icons.school_rounded,
+              title: "Faculty Approvals",
+              subtitle: "Confirm staff sign-ups and link them to the "
+                  "timetable",
+              color: AppColors.warning,
+              badgeCount: snapshot.data,
+              onTap: () => _open(context, const FacultyApprovalScreen()),
+            ),
+          ),
 
           StreamBuilder<int>(
             stream: AttendancePermissionService.instance.pendingCount(),

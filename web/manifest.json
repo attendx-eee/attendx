@@ -1,13 +1,14 @@
 {
-  "name": "AttendX",
-  "short_name": "AttendX",
+  "name": "AttendX Admin Console",
+  "short_name": "AttendX Admin",
   "start_url": ".",
   "display": "standalone",
-  "background_color": "#FFFFFF",
+  "background_color": "#F5F7FB",
   "theme_color": "#2563EB",
-  "description": "Smart face-recognition attendance for the EEE department.",
-  "orientation": "portrait-primary",
+  "description": "Attendance analysis, approvals and master data for the EEE department.",
+  "orientation": "any",
   "prefer_related_applications": false,
+  "categories": ["education", "productivity"],
   "icons": [
     {
       "src": "icons/Icon-192.png",

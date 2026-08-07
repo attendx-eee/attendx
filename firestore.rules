@@ -49,12 +49,45 @@ service cloud.firestore {
       return signedIn() && myRole() is string && myRole().lower() == 'faculty';
     }
 
+    // Faculty sign-ups land as 'pending' and can't mark anything until an
+    // admin approves them and links them to a timetable record. Enforced
+    // here, not just in the UI, so an unapproved account can't write to
+    // period_attendance directly.
+    function isApprovedFaculty() {
+      return isFaculty()
+        && exists(/databases/$(database)/documents/students/$(request.auth.uid))
+        && get(/databases/$(database)/documents/students/$(request.auth.uid)).data.facultyStatus == 'approved';
+    }
+
     // ---------- students ----------
     // Signed-in users can read profiles (needed for timetable/CR/admin
     // screens); users create/update only their own doc; admins manage all.
     match /students/{uid} {
       allow read: if signedIn();
-      allow create, update: if isSelf(uid) || isAdmin();
+
+      // Registration. `role` is restricted so nobody can sign up as an
+      // admin, and a faculty sign-up must start out pending — otherwise
+      // approving yourself would just be a matter of picking the right
+      // value at create time.
+      allow create: if isAdmin()
+        || (isSelf(uid)
+            && request.resource.data.get('role', 'student') in ['student', 'faculty']
+            && request.resource.data.get('facultyStatus', 'pending') == 'pending'
+            && request.resource.data.get('facultyId', '') == '');
+
+      // Self-service edits (profile, face enrollment flags, CR requests)
+      // are fine, but the three fields that grant power are admin-only:
+      // `role` decides which app you get, and facultyStatus/facultyId
+      // together decide whose attendance you can mark.
+      allow update: if isAdmin()
+        || (isSelf(uid)
+            && request.resource.data.get('role', 'student')
+                 == resource.data.get('role', 'student')
+            && request.resource.data.get('facultyStatus', 'pending')
+                 == resource.data.get('facultyStatus', 'pending')
+            && request.resource.data.get('facultyId', '')
+                 == resource.data.get('facultyId', ''));
+
       // Self-delete needed for the in-app "Delete Account" flow.
       allow delete: if isSelf(uid) || isAdmin();
     }
@@ -114,7 +147,12 @@ service cloud.firestore {
             && request.resource.data.month == request.resource.data.date[0:7]
             && crMayMark(request.resource.data.month));
 
-      allow delete: if isAdmin() || crMayMark(resource.data.month);
+      // Students may clear their own, which is what the in-app "Delete
+      // Account" flow needs — same exception attendance_events makes,
+      // and for the same reason.
+      allow delete: if isAdmin()
+        || crMayMark(resource.data.month)
+        || (signedIn() && resource.data.uid == request.auth.uid);
     }
 
     // ---------- CR attendance-marking permissions ----------
@@ -154,7 +192,7 @@ service cloud.firestore {
       allow read: if signedIn();
 
       allow create, update: if isAdmin()
-        || (isFaculty()
+        || (isApprovedFaculty()
             && request.resource.data.markedBy == request.auth.uid);
 
       allow delete: if isAdmin();

@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -10,6 +11,11 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_radius.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/section_header.dart';
+import '../../screens/face_enrollment_screen.dart';
+// ScanProfile lives here, not in the enrollment screen. Dart imports
+// aren't transitive, so importing the screen alone doesn't bring the
+// enum its constructor takes.
+import '../../services/enrollment/scan_harvester.dart';
 import '../models/faculty_account.dart';
 import '../models/period_attendance.dart';
 import '../services/period_attendance_service.dart';
@@ -123,10 +129,18 @@ class _FacultyHomeState extends State<FacultyHome> {
         }
       }
 
+      // Refreshed alongside the timetable so the tile reflects a face
+      // enrolled moments ago without needing its own reload.
+      final me = await FirebaseFirestore.instance
+          .collection('students')
+          .doc(widget.account.uid)
+          .get();
+
       if (mounted) {
         setState(() {
           _today = mine;
           _marked = marked;
+          _faceEnrolled = me.data()?['faceEnrolled'] == true;
           _loading = false;
         });
       }
@@ -157,6 +171,26 @@ class _FacultyHomeState extends State<FacultyHome> {
     // Reload rather than just repainting — the period's record now
     // exists and the card should show its counts.
     if (saved == true && mounted) await _load();
+  }
+
+  /// Whether this account already has a face on file.
+  bool _faceEnrolled = false;
+
+  Future<void> _openFaceEnrollment() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        // Not mandatory: a staff account is already usable without it,
+        // unlike a student's, so this stays skippable and repeatable.
+        // Frontal-only — staff are matched close up and deliberately,
+        // never across a room, so the wide sweep buys nothing.
+        builder: (_) => const FaceEnrollmentScreen(
+          mandatory: false,
+          scanProfile: ScanProfile.frontalOnly,
+        ),
+      ),
+    );
+    if (mounted) await _load();
   }
 
   Future<void> _confirmLogout() async {
@@ -220,13 +254,75 @@ class _FacultyHomeState extends State<FacultyHome> {
       ),
       body: MaxWidthBody(
         maxWidth: 820,
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : RefreshIndicator(
-                onRefresh: _load,
-                child: _buildBody(),
-              ),
+        child: !widget.account.isApproved
+            ? _buildAwaitingApproval()
+            : _loading
+                ? const Center(child: CircularProgressIndicator())
+                : RefreshIndicator(
+                    onRefresh: _load,
+                    child: _buildBody(),
+                  ),
       ),
+    );
+  }
+
+  /// Shown until an admin approves the account and links it to a
+  /// timetable record. Without that link there are no periods to list
+  /// and nothing this screen could usefully do.
+  Widget _buildAwaitingApproval() {
+    final rejected = widget.account.isRejected;
+
+    return ListView(
+      padding: Responsive.all(24),
+      children: [
+        SizedBox(height: Responsive.h(40)),
+        Center(
+          child: Container(
+            padding: Responsive.all(22),
+            decoration: BoxDecoration(
+              color: (rejected ? AppColors.danger : AppColors.warning)
+                  .withValues(alpha: .1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              rejected
+                  ? Icons.block_rounded
+                  : Icons.hourglass_top_rounded,
+              size: Responsive.sp(40),
+              color: rejected ? AppColors.danger : AppColors.warning,
+            ),
+          ),
+        ),
+        SizedBox(height: Responsive.h(20)),
+        Text(
+          rejected
+              ? 'Account not approved'
+              : 'Waiting for admin approval',
+          textAlign: TextAlign.center,
+          style: AppTextStyles.title,
+        ),
+        SizedBox(height: Responsive.h(10)),
+        Text(
+          rejected
+              ? (widget.account.decisionNote.isEmpty
+                  ? 'Your staff account request was not approved. '
+                      'Contact the department office.'
+                  : widget.account.decisionNote)
+              : 'The department office needs to confirm you and link your '
+                  'account to your name on the timetable. Your classes '
+                  'appear here as soon as they do.',
+          textAlign: TextAlign.center,
+          style: AppTextStyles.caption,
+        ),
+        SizedBox(height: Responsive.h(28)),
+        Center(
+          child: OutlinedButton.icon(
+            onPressed: _confirmLogout,
+            icon: const Icon(Icons.logout_rounded, size: 18),
+            label: const Text('Sign out'),
+          ),
+        ),
+      ],
     );
   }
 
@@ -266,6 +362,29 @@ class _FacultyHomeState extends State<FacultyHome> {
                 record: _marked['${entry.year}:${entry.period.periodNo}'],
                 onTap: () => _openScan(entry),
               )),
+
+        SizedBox(height: Responsive.h(18)),
+        const SectionHeader(
+          title: 'My account',
+          subtitle: 'Face sign-in for this device',
+        ),
+        SizedBox(height: Responsive.h(14)),
+
+        // Staff enroll a face for the same reason students do: so the
+        // app can confirm it's really them before something sensitive.
+        // It has nothing to do with them being marked present — faculty
+        // attendance isn't tracked here.
+        MasterTile(
+          icon: _faceEnrolled
+              ? Icons.face_retouching_natural_rounded
+              : Icons.face_rounded,
+          title: _faceEnrolled ? 'Update my face' : 'Enroll my face',
+          subtitle: _faceEnrolled
+              ? 'Re-scan if sign-in has been failing'
+              : 'Lets you confirm your identity without a password',
+          color: AppColors.teal,
+          onTap: _openFaceEnrollment,
+        ),
       ],
     );
   }

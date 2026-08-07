@@ -102,7 +102,13 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
         final data = doc.data()!;
         final storedEmbeddings = data['embeddings'] as Map<String, dynamic>?;
 
-        if (storedEmbeddings == null || !storedEmbeddings.containsKey('front')) {
+        // Any stored view will do. This used to demand a key literally
+        // named 'front', which quietly broke the moment enrollment
+        // started naming its angle bins differently — verification would
+        // report "no enrollment data" for a face that was enrolled
+        // perfectly well, taking Update Biometrics and Delete Account
+        // down with it, since both verify by face first.
+        if (storedEmbeddings == null || storedEmbeddings.isEmpty) {
           _exitNoEnrollmentData();
           return;
         }

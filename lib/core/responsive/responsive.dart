@@ -20,15 +20,14 @@ class Responsive {
   static const double mobileMaxWidth = 600;
   static const double tabletMaxWidth = 1200;
 
-  /// The widest the phone-ratio scaling is allowed to follow.
+  /// How much a large phone is allowed to inflate the design sizes.
   ///
-  /// Every size in this app is expressed against a 390 x 844 phone. Left
-  /// unbounded that ratio is fine on phones and ruinous on a browser: at
-  /// 1920px wide, an 18px padding becomes 88px and a card fills half the
-  /// window. Past this width the scale simply stops growing, so a desktop
-  /// gets phone-sized padding and desktop-sized layouts, which is what
-  /// actually reads well.
-  static const double _maxScaleWidth = 600;
+  /// Every size in this app is expressed against a 390 x 844 phone.
+  /// A 430px phone can carry slightly larger text and padding; beyond
+  /// about 15% it just looks blown up.
+  static const double _maxPhoneScale = 1.15;
+
+  static const double _minPhoneScale = 0.85;
 
   /// Comfortable reading width for a single column of content on a wide
   /// screen. Content wider than this gets centred rather than stretched.
@@ -44,10 +43,24 @@ class Responsive {
     screenHeight = _mediaQuery.size.height;
   }
 
-  /// Width the scaling maths uses — real width on phones, clamped on
-  /// anything larger.
-  static double get _scaleWidth =>
-      screenWidth > _maxScaleWidth ? _maxScaleWidth : screenWidth;
+  /// The multiplier applied to every design-time size.
+  ///
+  /// On a phone this tracks the screen, so a 430px handset gets slightly
+  /// roomier text than a 360px one. On a tablet or a browser it is
+  /// exactly 1 — design sizes, unscaled.
+  ///
+  /// That flat 1 is deliberate. Scaling a phone ratio up to desktop
+  /// widths is what made the console's text and padding look inflated:
+  /// a 14px label became 19px and an 18px gutter became 28px, which
+  /// reads as a phone app stretched over a monitor rather than a desktop
+  /// tool. Desktop UI conventions are already expressed in the design
+  /// numbers; the right thing to do on a big screen is use more of it
+  /// for layout, not to make everything bigger.
+  static double get _scale {
+    if (screenWidth >= mobileMaxWidth) return 1;
+    return (screenWidth / _designWidth)
+        .clamp(_minPhoneScale, _maxPhoneScale);
+  }
 
   static ScreenType get screenType {
     if (screenWidth < mobileMaxWidth) return ScreenType.mobile;
@@ -83,23 +96,18 @@ class Responsive {
   static int gridColumns({int mobile = 2, int tablet = 3, int desktop = 4}) =>
       value(mobile: mobile, tablet: tablet, desktop: desktop);
 
-  static double w(double value) => _scaleWidth * (value / _designWidth);
+  static double w(double value) => value * _scale;
 
-  /// Vertical sizes track height on phones. On a desktop browser the
-  /// window is short and wide, so following its height would squash
-  /// spacing; past the scale cap the phone ratio is used instead.
+  /// Vertical sizes track screen height on phones, where a tall handset
+  /// really does want more breathing room. On anything larger the design
+  /// value is used as-is: a browser window is short and wide, so
+  /// following its height would squash spacing rather than open it up.
   static double h(double value) {
-    if (screenWidth > _maxScaleWidth) return value;
+    if (screenWidth >= mobileMaxWidth) return value;
     return screenHeight * (value / _designHeight);
   }
 
-  static double sp(double value) {
-    final scale = _scaleWidth / _designWidth;
-    return (value * scale).clamp(
-      value * 0.85,
-      value * 1.35,
-    );
-  }
+  static double sp(double value) => value * _scale;
 
   static double radius(double value) => w(value);
 

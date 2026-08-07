@@ -66,29 +66,6 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
     super.dispose();
   }
 
-  /// Finds the Master Data faculty record for this employee ID.
-  ///
-  /// Matched on `employeeId` first; falls back to an exact name match
-  /// for records created before employee IDs were captured, so an
-  /// existing department doesn't have to be re-keyed before anyone can
-  /// sign up.
-  Future<QueryDocumentSnapshot<Map<String, dynamic>>?> _findFacultyRecord(
-    String employeeId,
-    String name,
-  ) async {
-    final faculty = FirebaseFirestore.instance.collection('faculty');
-
-    final byId =
-        await faculty.where('employeeId', isEqualTo: employeeId).limit(1).get();
-    if (byId.docs.isNotEmpty) return byId.docs.first;
-
-    final byName =
-        await faculty.where('name', isEqualTo: name).limit(1).get();
-    if (byName.docs.isNotEmpty) return byName.docs.first;
-
-    return null;
-  }
-
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
@@ -104,62 +81,22 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
     UserCredential? credential;
 
     try {
-      // The auth account has to come first. Every read below is gated on
-      // being signed in (see firestore.rules), so looking the staff
-      // record up beforehand would just return permission-denied. If any
-      // later step fails, the account created here is deleted again in
-      // the catch blocks — the same rollback the student flow uses.
       credential = await FirebaseAuth.instance
           .createUserWithEmailAndPassword(
         email: email,
         password: _password.text,
       );
 
-      final record = await _findFacultyRecord(employeeId, name);
-
-      if (record == null) {
-        await credential.user?.delete();
-        if (!mounted) return;
-        setState(() {
-          _busy = false;
-          _error = "No staff record found for employee ID \"$employeeId\". "
-              "Ask the department office to add you under Master Data → "
-              "Faculty Management first.";
-        });
-        return;
-      }
-
-      // Already claimed? Two logins pointing at one timetable identity
-      // would both see the same classes and could overwrite each other's
-      // attendance.
-      final existing = await FirebaseFirestore.instance
-          .collection('students')
-          .where('facultyId', isEqualTo: record.id)
-          .limit(1)
-          .get();
-
-      if (existing.docs.isNotEmpty) {
-        await credential.user?.delete();
-        if (!mounted) return;
-        setState(() {
-          _busy = false;
-          _error = 'An account already exists for this staff record. '
-              'Sign in instead, or contact the office.';
-        });
-        return;
-      }
-
       final uid = credential.user!.uid;
-      final recordData = record.data();
 
+      // Created pending, with no facultyId. The admin supplies that when
+      // they approve, by picking which timetable record this person is —
+      // which is also what decides whose classes they can mark.
       final account = FacultyAccount(
         uid: uid,
         employeeId: employeeId,
-        facultyId: record.id,
         name: name,
-        shortName: _shortName.text.trim().isEmpty
-            ? (recordData['shortName'] ?? '').toString()
-            : _shortName.text.trim(),
+        shortName: _shortName.text.trim(),
         designation: _designation,
         department: AppConfig.department,
         qualification: _qualification,
@@ -185,7 +122,8 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Account created. Sign in to see your classes.'),
+          content: Text('Account created. An admin will approve it before '
+              'your classes appear.'),
           backgroundColor: AppColors.success,
           behavior: SnackBarBehavior.floating,
         ),
