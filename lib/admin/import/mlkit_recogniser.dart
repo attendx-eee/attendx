@@ -1,6 +1,10 @@
 import 'dart:ui';
 
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+// Aliased: ML Kit exports its own `TextBlock`, which collides with ours.
+// Ours is the one the parsers are written against, so the package gets
+// the prefix rather than the domain type.
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart'
+    as mlkit;
 
 import 'document_text.dart';
 
@@ -19,12 +23,12 @@ import 'document_text.dart';
 class MlKitRecogniser implements TextRecogniser {
   MlKitRecogniser();
 
-  final TextRecognizer _recogniser =
-      TextRecognizer(script: TextRecognitionScript.latin);
+  final mlkit.TextRecognizer _recogniser =
+      mlkit.TextRecognizer(script: mlkit.TextRecognitionScript.latin);
 
   @override
   Future<DocumentText> recognise(String imagePath) async {
-    final input = InputImage.fromFilePath(imagePath);
+    final input = mlkit.InputImage.fromFilePath(imagePath);
     final result = await _recogniser.processImage(input);
 
     final blocks = <TextBlock>[];

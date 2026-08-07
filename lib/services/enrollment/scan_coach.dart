@@ -58,7 +58,6 @@ class ScanCoach {
   static const double _edgeMargin = 0.04;
 
   CoachIssue _current = CoachIssue.noFace;
-  DateTime _currentSince = DateTime.fromMillisecondsSinceEpoch(0);
 
   CoachIssue _candidate = CoachIssue.noFace;
   DateTime _candidateSince = DateTime.fromMillisecondsSinceEpoch(0);
@@ -80,7 +79,6 @@ class ScanCoach {
 
     if (now.difference(_candidateSince) >= _confirmAfter) {
       _current = observed;
-      _currentSince = now;
     }
 
     return _current;
@@ -197,7 +195,6 @@ class ScanCoach {
   void reset() {
     _current = CoachIssue.noFace;
     _candidate = CoachIssue.noFace;
-    _currentSince = DateTime.fromMillisecondsSinceEpoch(0);
     _candidateSince = DateTime.fromMillisecondsSinceEpoch(0);
   }
 }
