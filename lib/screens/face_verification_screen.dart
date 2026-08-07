@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
@@ -487,10 +488,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
     _hasSeenEyesClosed = false;
   }
 
+  /// One reusable scratch file — a fresh timestamped path per attempt
+  /// left a copy of the user's face in temp on every login.
+  late final String _scratchPath =
+      '${Directory.systemTemp.path}/attendx_verify_scratch.jpg';
+
   Future<File?> _convertStreamFrameToFile(CameraImage image) async {
     try {
-      final path =
-          '${Directory.systemTemp.path}/verify_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final path = _scratchPath;
 
       // Pack full plane attributes securely for the isolate calculation requirements
       final List<Map<String, dynamic>> serializedPlanes = image.planes
@@ -518,12 +523,40 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
     }
   }
 
+  static const Map<DeviceOrientation, int> _orientationDegrees = {
+    DeviceOrientation.portraitUp: 0,
+    DeviceOrientation.landscapeLeft: 90,
+    DeviceOrientation.portraitDown: 180,
+    DeviceOrientation.landscapeRight: 270,
+  };
+
   InputImage? _convertCameraImageToInputImage(CameraImage image) {
     try {
       final camera = _cameraController!.description;
-      final rotation =
-          InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
-              InputImageRotation.rotation0deg;
+
+      // Front camera: add the device rotation to the sensor orientation.
+      // Passing the raw sensor orientation gave ML Kit a sideways frame,
+      // which is a plausible contributor to face login being unreliable
+      // — a rotated crop embeds to a vector that matches nothing.
+      final InputImageRotation rotation;
+
+      if (Platform.isIOS) {
+        rotation =
+            InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+                InputImageRotation.rotation0deg;
+      } else {
+        final deviceRotation =
+            _orientationDegrees[_cameraController!.value.deviceOrientation] ??
+                0;
+
+        final compensated = camera.lensDirection == CameraLensDirection.front
+            ? (camera.sensorOrientation + deviceRotation) % 360
+            : (camera.sensorOrientation - deviceRotation + 360) % 360;
+
+        rotation = InputImageRotationValue.fromRawValue(compensated) ??
+            InputImageRotation.rotation0deg;
+      }
+
       final format = InputImageFormatValue.fromRawValue(image.format.raw) ??
           InputImageFormat.nv21;
 
@@ -549,6 +582,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
   void dispose() {
     _cameraWatchdog?.cancel();
     _cameraController?.dispose();
+
+    try {
+      final scratch = File(_scratchPath);
+      if (scratch.existsSync()) scratch.deleteSync();
+    } catch (_) {
+      // Best effort.
+    }
+
     super.dispose();
   }
 

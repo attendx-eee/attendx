@@ -4,6 +4,7 @@ import 'package:camera/camera.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 import '../../admin/models/period_model.dart';
@@ -251,10 +252,15 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
     }
   }
 
+  /// Reused every frame rather than a new timestamped file each time.
+  /// A classroom sweep runs for minutes and encodes one JPEG per
+  /// processed frame; timestamped paths would fill temp storage.
+  late final String _scratchPath =
+      '${Directory.systemTemp.path}/attendx_class_scratch.jpg';
+
   Future<File?> _toFile(CameraImage image) async {
     try {
-      final path =
-          '${Directory.systemTemp.path}/class_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final path = _scratchPath;
 
       final planes = image.planes
           .map((p) => {
@@ -285,11 +291,39 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
     }
   }
 
+  static const Map<DeviceOrientation, int> _orientationDegrees = {
+    DeviceOrientation.portraitUp: 0,
+    DeviceOrientation.landscapeLeft: 90,
+    DeviceOrientation.portraitDown: 180,
+    DeviceOrientation.landscapeRight: 270,
+  };
+
   InputImage? _toInputImage(CameraImage image) {
     try {
-      final rotation = InputImageRotationValue.fromRawValue(
-              _camera?.description.sensorOrientation ?? 90) ??
-          InputImageRotation.rotation90deg;
+      final camera = _camera!.description;
+
+      // Back camera here, so the device rotation is subtracted rather
+      // than added — the opposite of the front-facing enrollment screen.
+      // Getting this wrong doesn't just soften detection; a sideways
+      // frame produces crops the embedder can't match against anything.
+      final InputImageRotation rotation;
+
+      if (Platform.isIOS) {
+        rotation =
+            InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+                InputImageRotation.rotation0deg;
+      } else {
+        final deviceRotation =
+            _orientationDegrees[_camera!.value.deviceOrientation] ?? 0;
+
+        final compensated =
+            camera.lensDirection == CameraLensDirection.front
+                ? (camera.sensorOrientation + deviceRotation) % 360
+                : (camera.sensorOrientation - deviceRotation + 360) % 360;
+
+        rotation = InputImageRotationValue.fromRawValue(compensated) ??
+            InputImageRotation.rotation0deg;
+      }
 
       final format =
           InputImageFormatValue.fromRawValue(image.format.raw) ??
@@ -348,6 +382,15 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
   void dispose() {
     _camera?.dispose();
     _recogniser.dispose();
+
+    // A frame of a classroom full of students shouldn't outlive the scan.
+    try {
+      final scratch = File(_scratchPath);
+      if (scratch.existsSync()) scratch.deleteSync();
+    } catch (_) {
+      // Best effort.
+    }
+
     super.dispose();
   }
 

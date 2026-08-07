@@ -777,10 +777,22 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
   // what the harvester still needs rather than from a hardcoded order.
 
 
+  /// One reusable scratch file for the whole scan.
+  ///
+  /// This used to be a fresh timestamped path per frame, which the
+  /// scanning rewrite turned into a genuine leak: the old flow wrote ten
+  /// files and stopped, but a continuous sweep writes one for every
+  /// frame it examines — hundreds over a scan, none of them deleted.
+  /// Frames are processed strictly one at a time (see the
+  /// `_isProcessingFrame` guard), so a single path can safely be
+  /// overwritten instead.
+  late final String _scratchPath =
+      '${Directory.systemTemp.path}/attendx_enroll_scratch.jpg';
+
   Future<File?> _convertStreamFrameToFile(CameraImage image) async {
     try {
-      final path = '${Directory.systemTemp.path}/enroll_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      
+      final path = _scratchPath;
+
       // Map out all layout configurations explicitly to prevent thread data omissions
       final List<Map<String, dynamic>> planeData = image.planes.map((p) => {
         'bytes': p.bytes,
@@ -1110,10 +1122,48 @@ Future<void> _uploadEmbeddingsToFirebase() async {
     );
   }
 
+  /// Maps a device orientation to the degrees the preview is rotated by.
+  static const Map<DeviceOrientation, int> _orientationDegrees = {
+    DeviceOrientation.portraitUp: 0,
+    DeviceOrientation.landscapeLeft: 90,
+    DeviceOrientation.portraitDown: 180,
+    DeviceOrientation.landscapeRight: 270,
+  };
+
   InputImage? _convertCameraImageToInputImage(CameraImage image) {
     try {
       final camera = _cameraController!.description;
-      final rotation = InputImageRotationValue.fromRawValue(camera.sensorOrientation) ?? InputImageRotation.rotation0deg;
+
+      // Rotation has to be compensated for, and the formula differs by
+      // lens. This screen uses the FRONT camera, where the device
+      // rotation is *added* to the sensor orientation; back cameras
+      // subtract it. Passing the raw sensor orientation — as this did —
+      // hands ML Kit a sideways image.
+      //
+      // That's not just a detection problem: every head angle this scan
+      // depends on is measured in that rotated frame, so yaw and pitch
+      // come out scrambled and the angle bins fill with the wrong
+      // frames, or never fill at all.
+      final InputImageRotation rotation;
+
+      if (Platform.isIOS) {
+        rotation =
+            InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+                InputImageRotation.rotation0deg;
+      } else {
+        final deviceRotation = _orientationDegrees[
+                _cameraController!.value.deviceOrientation] ??
+            0;
+
+        final compensated =
+            camera.lensDirection == CameraLensDirection.front
+                ? (camera.sensorOrientation + deviceRotation) % 360
+                : (camera.sensorOrientation - deviceRotation + 360) % 360;
+
+        rotation = InputImageRotationValue.fromRawValue(compensated) ??
+            InputImageRotation.rotation0deg;
+      }
+
       final format = InputImageFormatValue.fromRawValue(image.format.raw) ?? InputImageFormat.nv21;
 
       final metadata = InputImageMetadata(
@@ -1140,6 +1190,15 @@ Future<void> _uploadEmbeddingsToFirebase() async {
     _messageTimer?.cancel();
     _pendingState = null;
     _cameraController?.dispose();
+
+    // Don't leave the last frame of someone's face sitting in temp.
+    try {
+      final scratch = File(_scratchPath);
+      if (scratch.existsSync()) scratch.deleteSync();
+    } catch (_) {
+      // Best effort — the OS clears its temp directory anyway.
+    }
+
     super.dispose();
   }
 
