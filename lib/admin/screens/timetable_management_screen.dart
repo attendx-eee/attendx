@@ -343,10 +343,28 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
     FacultyModel? selectedFaculty;
     RoomModel? selectedRoom;
 
+    // Why the last Save attempt didn't go through.
+    //
+    // This used to be a SnackBar raised from inside the dialog, which
+    // meant it rendered on the Scaffold *behind* the modal barrier —
+    // invisible. Pressing Save on an incomplete period therefore looked
+    // like the button did nothing at all, which is exactly what it
+    // looked like from the outside.
+    String? saveError;
+
+    // Whether the dropdowns had anything to offer. An empty Master Data
+    // set produces empty dropdowns and an unsatisfiable form, and the
+    // student deserves to be told that rather than left guessing.
+    var hadOptions = true;
+
     await showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
+        // The StatefulBuilder wraps the whole dialog, not just its
+        // content: the Save button lives in `actions` and needs to be
+        // able to redraw the error message it sets.
+        return StatefulBuilder(
+          builder: (context, setModalState) => AlertDialog(
           shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(AppRadius.lg)),
           icon: Icon(
@@ -361,8 +379,8 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
               style: AppTextStyles.title),
           content: SizedBox(
             width: 360,
-            child: StatefulBuilder(
-              builder: (context, setModalState) {
+            child: Builder(
+              builder: (context) {
                 return StreamBuilder<List<SubjectModel>>(
                   stream: subjectsStream,
                   builder: (context, subjectsSnapshot) {
@@ -396,10 +414,59 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
                                     ? rooms.firstWhere((item) => item.roomNumber == period.room)
                                     : null;
 
+                                hadOptions = faculty.isNotEmpty &&
+                                    rooms.isNotEmpty &&
+                                    (isLab ? labs.isNotEmpty : subjects.isNotEmpty);
+
                                 return SingleChildScrollView(
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
+                                      if (!hadOptions) ...[
+                                        Container(
+                                          width: double.infinity,
+                                          padding: const EdgeInsets.all(12),
+                                          margin: const EdgeInsets.only(bottom: 12),
+                                          decoration: BoxDecoration(
+                                            color: AppColors.warning.withValues(alpha: .1),
+                                            borderRadius: BorderRadius.circular(AppRadius.sm),
+                                          ),
+                                          child: Text(
+                                            'Some lists are empty. Add subjects, labs, '
+                                            'faculty and rooms under Master Data before '
+                                            'building the timetable.',
+                                            style: AppTextStyles.caption,
+                                          ),
+                                        ),
+                                      ],
+                                      if (saveError != null) ...[
+                                        Container(
+                                          width: double.infinity,
+                                          padding: const EdgeInsets.all(12),
+                                          margin: const EdgeInsets.only(bottom: 12),
+                                          decoration: BoxDecoration(
+                                            color: AppColors.danger.withValues(alpha: .1),
+                                            borderRadius: BorderRadius.circular(AppRadius.sm),
+                                            border: Border.all(
+                                                color: AppColors.danger.withValues(alpha: .3)),
+                                          ),
+                                          child: Row(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              const Icon(Icons.error_outline_rounded,
+                                                  color: AppColors.danger, size: 17),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Text(
+                                                  saveError!,
+                                                  style: AppTextStyles.caption
+                                                      .copyWith(color: AppColors.danger),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
                                       SegmentedButton<String>(
                                         segments: const [
                                           ButtonSegment(value: 'Theory', icon: Icon(Icons.book), label: Text('Theory')),
@@ -508,10 +575,23 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
             TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
             FilledButton(
               onPressed: () async {
-                if (selectedFaculty == null || selectedRoom == null || (isLab ? selectedLab == null : selectedSubject == null)) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Please choose a valid class, faculty and room.')),
-                  );
+                // Name the missing field. "Please choose a valid class,
+                // faculty and room" is no help when three of the four
+                // are already filled in and the user can't tell which
+                // one the form is unhappy about.
+                final missing = <String>[
+                  if (isLab && selectedLab == null) 'lab',
+                  if (!isLab && selectedSubject == null) 'subject',
+                  if (selectedFaculty == null) 'faculty',
+                  if (selectedRoom == null) 'room',
+                ];
+
+                if (missing.isNotEmpty) {
+                  setModalState(() {
+                    saveError = missing.length == 1
+                        ? 'Choose a ${missing.first} before saving.'
+                        : 'Still needed: ${missing.join(', ')}.';
+                  });
                   return;
                 }
 
@@ -553,6 +633,7 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
               child: const Text('Save'),
             ),
           ],
+          ),
         );
       },
     );
