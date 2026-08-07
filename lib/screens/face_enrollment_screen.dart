@@ -230,6 +230,9 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
             _isWarmUpComplete = true;
             _flowState = EnrollmentFlowState.waitingForFace;
             _statusMessage = "Position your face inside the guide";
+            // Give the baseline its own moment before the first frame's
+            // verdict is allowed to replace it.
+            _messageShownAt = DateTime.now();
           });
 
           // 🔑 Run calibration once warm-up is complete
@@ -492,7 +495,8 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
           if (!isDark && mounted) {
             setState(() {
               _isLowLightPaused = false;
-              _statusMessage = "Lighting normalized. Aligning tracker matrix...";
+              _statusMessage = "Lighting looks better — hold steady";
+              _messageShownAt = DateTime.now();
             });
             _startFrameSubscription();
           }
@@ -503,17 +507,84 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
     }
   }
 
+  /// The floor on how long any message stays on screen.
+  ///
+  /// Camera frames arrive ~30 times a second and roughly ten different
+  /// places in this file want to write a status line. Left ungated they
+  /// overwrite each other faster than anyone can read, which is
+  /// experienced as text strobing rather than as guidance.
+  ///
+  /// This is deliberately enforced here, at the one exit point every
+  /// writer goes through, rather than in each of them. Debouncing the
+  /// coach alone wasn't enough precisely because the liveness prompt,
+  /// the alignment prompt and the sweep instruction never went through
+  /// the coach.
+  static const Duration _minMessageHold = Duration(milliseconds: 1800);
+
+  /// States that must appear the instant they happen. Holding a stale
+  /// "turn your head left" over a failure — or over the moment the scan
+  /// finishes — would be worse than the flicker this guards against.
+  static const Set<EnrollmentFlowState> _immediateStates = {
+    EnrollmentFlowState.failed,
+    EnrollmentFlowState.completed,
+    EnrollmentFlowState.processing,
+    EnrollmentFlowState.uploading,
+    EnrollmentFlowState.checkingDuplicate,
+  };
+
+  DateTime _messageShownAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _messageTimer;
+  EnrollmentFlowState? _pendingState;
+  String? _pendingMessage;
+
   void _setFlowState(
     EnrollmentFlowState state,
     String message,
   ) {
     if (!mounted) return;
 
-    if (_flowState == state &&
-        _statusMessage == message) {
+    // Already showing this — cancel anything queued behind it, since the
+    // condition evidently came back on its own.
+    if (_flowState == state && _statusMessage == message) {
+      _messageTimer?.cancel();
+      _pendingState = null;
+      _pendingMessage = null;
       return;
     }
 
+    if (_immediateStates.contains(state)) {
+      _messageTimer?.cancel();
+      _pendingState = null;
+      _pendingMessage = null;
+      _applyFlowState(state, message);
+      return;
+    }
+
+    final elapsed = DateTime.now().difference(_messageShownAt);
+
+    if (elapsed >= _minMessageHold) {
+      _applyFlowState(state, message);
+      return;
+    }
+
+    // Too soon. Queue it — replacing whatever was already queued, so the
+    // student always ends up seeing the *latest* state rather than a
+    // backlog of stale ones — and show it when the current message has
+    // had its time.
+    _pendingState = state;
+    _pendingMessage = message;
+
+    _messageTimer?.cancel();
+    _messageTimer = Timer(_minMessageHold - elapsed, () {
+      if (!mounted || _pendingState == null) return;
+      _applyFlowState(_pendingState!, _pendingMessage!);
+      _pendingState = null;
+      _pendingMessage = null;
+    });
+  }
+
+  void _applyFlowState(EnrollmentFlowState state, String message) {
+    _messageShownAt = DateTime.now();
     setState(() {
       _flowState = state;
       _statusMessage = message;
@@ -688,6 +759,7 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
       _isLowLightPaused = false;
       _flowState = EnrollmentFlowState.waitingForFace;
       _statusMessage = "Position your face in the circle";
+      _messageShownAt = DateTime.now();
     });
     _startFrameSubscription();
   }
@@ -1019,13 +1091,9 @@ Future<void> _uploadEmbeddingsToFirebase() async {
     );
   }
 
-  void _updateStatus(String msg) {
-    if (_statusMessage != msg && mounted) {
-      setState(() {
-        _statusMessage = msg;
-      });
-    }
-  }
+  /// Routed through the same gate as everything else, so a caller can't
+  /// sidestep the minimum hold just by using the shorter helper.
+  void _updateStatus(String msg) => _setFlowState(_flowState, msg);
 
   void _showSnackbar(String text, Color bg) {
     if (!mounted) return;
@@ -1059,6 +1127,10 @@ Future<void> _uploadEmbeddingsToFirebase() async {
 
   @override
   void dispose() {
+    // A queued message firing after the screen is gone would setState on
+    // a dead State.
+    _messageTimer?.cancel();
+    _pendingState = null;
     _cameraController?.dispose();
     super.dispose();
   }

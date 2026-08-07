@@ -25,6 +25,7 @@ import '../screens/attendance_insights_screen.dart';
 import '../screens/attendance_permission_screen.dart';
 import '../screens/batch_screen.dart';
 import '../screens/faculty_approval_screen.dart';
+import '../screens/holiday_screen.dart';
 import '../widgets/admin_hero_header.dart';
 import '../widgets/master_tile.dart';
 
@@ -335,6 +336,12 @@ class MasterHome extends StatelessWidget {
                 title: "Batches",
                 color: AppColors.primary,
                 onTap: () => _open(context, const BatchScreen()),
+              ),
+              _GridTile(
+                icon: Icons.beach_access_rounded,
+                title: "Holidays",
+                color: AppColors.primary,
+                onTap: () => _open(context, const HolidayScreen()),
               ),
               _GridTile(
                 icon: Icons.schedule_rounded,

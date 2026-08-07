@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
@@ -78,8 +79,159 @@ class _AuthGate extends StatelessWidget {
           return const _NotAnAdmin();
         }
 
+        return _RoleCheck(uid: user.uid);
+      },
+    );
+  }
+}
+
+/// Confirms the signed-in admin actually has an admin *role document*.
+///
+/// Signing in is not the same as being an admin. The security rules
+/// resolve a role by reading `students/{uid}`, falling back to
+/// `users/{uid}`; if neither exists, or neither says `hod`/`office`,
+/// every admin-only read and write is denied — while anything needing
+/// only a signed-in user keeps working.
+///
+/// That combination is baffling from the outside: the student list
+/// loads, the calendar renders, and then saving a mark fails with
+/// "Missing or insufficient permissions", which reads like a rules bug
+/// rather than a missing document. Checking here turns it into one
+/// sentence saying exactly what to create.
+class _RoleCheck extends StatelessWidget {
+  final String uid;
+
+  const _RoleCheck({required this.uid});
+
+  Future<String?> _resolveRole() async {
+    final db = FirebaseFirestore.instance;
+
+    final student = await db.collection('students').doc(uid).get();
+    if (student.exists) {
+      return (student.data()?['role'] ?? '').toString().toLowerCase();
+    }
+
+    final legacy = await db.collection('users').doc(uid).get();
+    if (legacy.exists) {
+      return (legacy.data()?['role'] ?? '').toString().toLowerCase();
+    }
+
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String?>(
+      future: _resolveRole(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final role = snapshot.data;
+
+        if (role != 'hod' && role != 'office') {
+          return _MissingRole(uid: uid, foundRole: role);
+        }
+
         return AdminWebShell(onSignedOut: () {});
       },
+    );
+  }
+}
+
+/// Shown when the admin account has no usable role document.
+class _MissingRole extends StatelessWidget {
+  final String uid;
+  final String? foundRole;
+
+  const _MissingRole({required this.uid, required this.foundRole});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(28),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.rule_folder_outlined,
+                    color: AppColors.warning, size: 40),
+                const SizedBox(height: 16),
+                Text('This account has no admin role',
+                    style: AppTextStyles.headline),
+                const SizedBox(height: 10),
+                Text(
+                  foundRole == null
+                      ? 'Sign-in worked, but there is no profile document '
+                          'for this account, so the security rules can\'t '
+                          'tell it\'s an admin. Reads that any signed-in '
+                          'user may do will appear to work; everything '
+                          'admin-only fails with "insufficient '
+                          'permissions".'
+                      : 'This account\'s role is "$foundRole". The console '
+                          'needs "hod" or "office".',
+                  style: AppTextStyles.caption,
+                ),
+                const SizedBox(height: 20),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.divider),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('To fix it', style: AppTextStyles.title),
+                      const SizedBox(height: 10),
+                      Text(
+                        'In the Firebase console, create this document:',
+                        style: AppTextStyles.caption,
+                      ),
+                      const SizedBox(height: 10),
+                      SelectableText(
+                        'students/$uid\n'
+                        '  role: "hod"\n'
+                        '  name: "Administrator"',
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 13,
+                          height: 1.6,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Then reload this page.',
+                        style: AppTextStyles.caption,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 22),
+                Row(
+                  children: [
+                    FilledButton.icon(
+                      onPressed: () => FirebaseAuth.instance.signOut(),
+                      icon: const Icon(Icons.logout_rounded, size: 18),
+                      label: const Text('Sign out'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

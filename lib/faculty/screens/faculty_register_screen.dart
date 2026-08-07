@@ -7,6 +7,8 @@ import '../../core/responsive/responsive.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_radius.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../admin/models/faculty_model.dart';
+import '../../admin/services/master_data_service.dart';
 import '../models/faculty_account.dart';
 
 /// Faculty sign-up.
@@ -41,6 +43,11 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
   final _password = TextEditingController();
   final _confirm = TextEditingController();
   final _experience = TextEditingController(text: '0');
+
+  /// The Master Data faculty record the applicant picked, if any. Only a
+  /// convenience for filling the form — the admin still chooses the real
+  /// link when approving.
+  String? _pickedFacultyId;
 
   String _designation = FacultyAccount.designations[2];
   String _qualification = FacultyAccount.qualifications.first;
@@ -191,6 +198,66 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
                 style: AppTextStyles.caption,
               ),
               SizedBox(height: Responsive.h(22)),
+
+              // Picking your name off the department list fills in the
+              // rest. Typing an employee ID from memory is the step
+              // people get wrong, and a mistyped one means the admin
+              // can't match the request to a real member of staff.
+              StreamBuilder<List<FacultyModel>>(
+                stream: MasterDataService.instance.getFaculty(),
+                builder: (context, snapshot) {
+                  final faculty = snapshot.data ?? const <FacultyModel>[];
+
+                  return Padding(
+                    padding: EdgeInsets.only(bottom: Responsive.h(14)),
+                    child: DropdownButtonFormField<String>(
+                      initialValue: _pickedFacultyId,
+                      isExpanded: true,
+                      decoration: InputDecoration(
+                        labelText: 'Find your name on the staff list',
+                        helperText: faculty.isEmpty
+                            ? 'Staff list unavailable — fill the fields below'
+                            : 'Fills your ID and initials automatically',
+                        helperMaxLines: 2,
+                        prefixIcon: const Icon(Icons.person_search_outlined,
+                            size: 20),
+                        filled: true,
+                        fillColor: AppColors.surface,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(AppRadius.sm),
+                        ),
+                      ),
+                      items: faculty
+                          .map((f) => DropdownMenuItem(
+                                value: f.id,
+                                child: Text(
+                                  f.employeeId.isEmpty
+                                      ? f.name
+                                      : '${f.name} — ${f.employeeId}',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ))
+                          .toList(),
+                      onChanged: (id) {
+                        if (id == null) return;
+                        final picked =
+                            faculty.firstWhere((f) => f.id == id);
+                        setState(() {
+                          _pickedFacultyId = id;
+                          _employeeId.text = picked.employeeId;
+                          _name.text = picked.name;
+                          _shortName.text = picked.shortName;
+                          if (picked.designation.isNotEmpty &&
+                              FacultyAccount.designations
+                                  .contains(picked.designation)) {
+                            _designation = picked.designation;
+                          }
+                        });
+                      },
+                    ),
+                  );
+                },
+              ),
 
               _field(
                 controller: _employeeId,

@@ -12,6 +12,7 @@ import '../models/time_slot_model.dart';
 import '../services/batch_service.dart';
 import '../services/master_data_service.dart';
 import '../services/timetable_service.dart';
+import '../import/import_entry.dart';
 import '../widgets/add_time_slot_dialog.dart';
 import '../widgets/add_subject_dialog.dart';
 import '../widgets/add_lab_dialog.dart';
@@ -571,6 +572,15 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
         elevation: 0,
         foregroundColor: AppColors.textPrimary,
         actions: [
+          // Reading a sheet is an alternative to typing it, never a
+          // replacement — the manual editor below is unchanged, and the
+          // import only ever produces something to check.
+          if (canImportFromImage)
+            IconButton(
+              tooltip: 'Import from image',
+              icon: const Icon(Icons.document_scanner_outlined),
+              onPressed: () => openTimetableImport(context),
+            ),
           IconButton(
             tooltip: 'Refresh',
             icon: const Icon(Icons.refresh_rounded),

@@ -28,22 +28,31 @@ enum CoachIssue {
 /// label produces text that changes faster than anyone can read, which
 /// users experience as the app malfunctioning rather than as advice.
 ///
-/// Two pieces of hysteresis fix it, the same shape of solution Apple's
-/// enrollment uses:
+/// The fix has two halves, split by responsibility:
 ///
-/// - **A new issue must persist** for [_confirmAfter] before it's shown.
-///   A single bad frame as someone blinks or shifts is not worth
-///   announcing.
-/// - **Once shown, a message stays** for [_minDisplay] even if the
-///   condition clears. Text that appears and vanishes within 200ms may
-///   as well not have appeared.
-///
-/// The exception is [CoachIssue.noFace], which is promoted immediately —
-/// if the camera has lost the face entirely, waiting half a second to
-/// say so is the one case where delay is worse than flicker.
+/// - **Here:** a new issue must persist for [_confirmAfter] before it's
+///   accepted as true. A single bad frame as someone blinks or shifts is
+///   not worth reacting to.
+/// - **In the enrollment screen:** whatever this decides is then held on
+///   screen for a minimum duration, enforced at the one point every
+///   status writer funnels through — including the liveness and
+///   alignment prompts, which never come through here at all. That
+///   placement matters: debouncing only the coach still left those
+///   others free to overwrite the label on any frame.
 class ScanCoach {
-  static const Duration _confirmAfter = Duration(milliseconds: 450);
-  static const Duration _minDisplay = Duration(milliseconds: 1400);
+  /// How long a problem must persist before it counts as real.
+  ///
+  /// This is the coach's only timing responsibility: deciding *what is
+  /// true*, not how long it stays on screen. A single bad frame as
+  /// someone blinks or shifts isn't worth reacting to; half a second of
+  /// it is.
+  ///
+  /// How long the resulting message is *displayed* is enforced
+  /// separately, at the point every status writer in the enrollment
+  /// screen funnels through. Holding it in both places would compound —
+  /// half a second to notice plus nearly two to display — and make the
+  /// scan feel unresponsive rather than calm.
+  static const Duration _confirmAfter = Duration(milliseconds: 500);
 
   /// A face this close to the frame edge is probably clipped.
   static const double _edgeMargin = 0.04;
@@ -69,16 +78,7 @@ class ScanCoach {
 
     if (observed == _current) return _current;
 
-    final settled = now.difference(_candidateSince) >= _confirmAfter;
-    final heldLongEnough = now.difference(_currentSince) >= _minDisplay;
-
-    // Losing the face is urgent enough to skip the wait; so is the
-    // moment everything comes right, because holding a stale complaint
-    // over a good frame is what makes a scan feel unresponsive.
-    final urgent =
-        observed == CoachIssue.noFace || observed == CoachIssue.none;
-
-    if ((settled && heldLongEnough) || (urgent && settled)) {
+    if (now.difference(_candidateSince) >= _confirmAfter) {
       _current = observed;
       _currentSince = now;
     }

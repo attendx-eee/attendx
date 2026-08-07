@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
 import '../admin/models/period_model.dart';
+import '../admin/services/holiday_service.dart';
 import '../admin/services/timetable_service.dart';
 import '../attendance/models/manual_attendance_model.dart';
 import '../attendance/services/manual_attendance_service.dart';
@@ -79,8 +80,19 @@ class AttendanceService {
     required String department,
     required int year,
     required String weekday,
+    /// When given, the day is also checked against the holiday
+    /// calendar. Without it only the weekday is considered, which is
+    /// what callers that genuinely want "the Monday timetable" expect.
+    DateTime? on,
   }) async {
     if (weekday == 'Sunday') return const [];
+
+    // A closed day has no scheduled periods, which is what makes the
+    // rest of the pipeline treat it as "not a college day" rather than
+    // marking everyone absent for a holiday.
+    if (on != null && !HolidayService.instance.isWorkingDay(on, year: year)) {
+      return const [];
+    }
 
     final key = '$department|$year|$weekday';
     final cached = _scheduleCache[key];
@@ -179,6 +191,12 @@ class AttendanceService {
       final department = AppConfig.departmentOf(studentData);
       final year = AppConfig.yearOf(studentData);
 
+      // Warm the holiday cache before any day is judged. It's checked
+      // synchronously per-day inside the loop below, and an unloaded
+      // cache silently reports every holiday as a working day — which
+      // would mark a whole class absent for Sankranti.
+      await HolidayService.instance.all();
+
       // One query for all of this student's events (uid is a single-field
       // filter — no composite index required).
       final snapshot = await _events.where('uid', isEqualTo: uid).get();
@@ -225,6 +243,7 @@ class AttendanceService {
             department: department,
             year: year,
             weekday: weekday,
+            on: date,
           );
 
           final dateId = AppConfig.dateId(date);
@@ -288,6 +307,10 @@ class AttendanceService {
     final department = AppConfig.departmentOf(studentData);
     final year = AppConfig.yearOf(studentData);
 
+    // Same reason as semesterStats: the per-day holiday check is
+    // synchronous, so the cache has to be filled before the loop starts.
+    await HolidayService.instance.all();
+
     final daysInMonth = DateTime(calendarYear, month + 1, 0).day;
     final today = DateTime.now();
     final result = <int, DayVerdict>{};
@@ -301,6 +324,7 @@ class AttendanceService {
         department: department,
         year: year,
         weekday: AppConfig.dayName(date),
+        on: date,
       );
 
       final future = date.isAfter(DateTime(today.year, today.month, today.day));

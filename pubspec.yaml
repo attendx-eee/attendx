@@ -40,6 +40,11 @@ dependencies:
   image_picker: ^1.2.2
   http: ^1.2.2
   google_mlkit_face_detection: ^0.13.2
+  # On-device text recognition for the timetable/calendar importer.
+  # Runs entirely on the phone — no network, no API key, no per-page
+  # cost — and only supplies characters; all the structure and meaning
+  # is parsed by lib/admin/import/.
+  google_mlkit_text_recognition: ^0.15.0
   tflite_flutter: ^0.12.1
   image: ^4.8.0
   path_provider: ^2.1.5

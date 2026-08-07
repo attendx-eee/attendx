@@ -57,6 +57,17 @@ class LocalNotificationService {
   /// Ids 9900+weekday are reserved for the morning schedule digests.
   static const int _digestIdBase = 9900;
 
+  /// How long before a class ends to nudge the lecturer to mark it.
+  static const int _wrapUpLeadMinutes = 10;
+
+  // Notification id ranges, kept well apart so faculty reminders can
+  // never collide with the student ones. Student class reminders use
+  // `weekday * 100 + periodNo` (max ~707), so everything below starts
+  // clear of that.
+  static const int _facultyDigestIdBase = 20000;
+  static const int _facultyStartIdBase = 21000;
+  static const int _facultyEndIdBase = 22000;
+
   Future<void> init() async {
     if (_initialized || kIsWeb) return;
 
@@ -159,7 +170,7 @@ class LocalNotificationService {
             android: _scheduleChannel,
             iOS: DarwinNotificationDetails(),
           ),
-          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
           matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
         );
       }
@@ -230,9 +241,179 @@ class LocalNotificationService {
           ),
           iOS: const DarwinNotificationDetails(),
         ),
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
         matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
       );
+    }
+  }
+
+  /// Reminders for the person *teaching* a period, not attending it.
+  ///
+  /// Different from the student reminders in what they're for. A student
+  /// is told a class is coming so they can get there; a lecturer already
+  /// knows their own timetable. What they need is a prompt at the moment
+  /// there's something to *do* — start the class scan, and close it out
+  /// before the room empties.
+  ///
+  /// Three per period:
+  /// - a morning digest of the day's teaching,
+  /// - one at the start of each class: take attendance,
+  /// - one [_wrapUpLeadMinutes] before the end: last chance, because
+  ///   attendance marked after everyone has walked out is guesswork.
+  Future<void> scheduleFacultyReminders(
+    Map<String, List<PeriodModel>> weekSchedule,
+  ) async {
+    if (kIsWeb || !_initialized) return;
+
+    const dayNumbers = {
+      'Monday': DateTime.monday,
+      'Tuesday': DateTime.tuesday,
+      'Wednesday': DateTime.wednesday,
+      'Thursday': DateTime.thursday,
+      'Friday': DateTime.friday,
+      'Saturday': DateTime.saturday,
+    };
+
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'faculty_classes',
+        'My Classes',
+        channelDescription:
+            'Reminders to take attendance for classes you teach',
+        importance: Importance.high,
+        priority: Priority.high,
+      ),
+      iOS: DarwinNotificationDetails(),
+    );
+
+    for (final entry in weekSchedule.entries) {
+      final weekday = dayNumbers[entry.key];
+      if (weekday == null) continue;
+
+      final periods = entry.value
+          .where((p) => !p.isFree && p.subject.isNotEmpty)
+          .toList();
+      if (periods.isEmpty) continue;
+
+      // ---- morning digest of what they're teaching today ----
+      final lines = periods
+          .map((p) => "${p.startTime}  ${p.subject}"
+              "${p.room.isEmpty ? '' : ' • ${p.room}'}")
+          .join('\n');
+
+      await _plugin.zonedSchedule(
+        _facultyDigestIdBase + weekday,
+        "${entry.key}: ${periods.length} class"
+        "${periods.length == 1 ? '' : 'es'} to teach",
+        "First at ${periods.first.startTime}\n$lines",
+        _nextInstanceOf(
+          weekday: weekday,
+          hour: AppConfig.dailyDigestHour,
+          minute: 0,
+          leadMinutes: 0,
+        ),
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            'faculty_classes',
+            'My Classes',
+            channelDescription:
+                'Reminders to take attendance for classes you teach',
+            importance: Importance.high,
+            priority: Priority.high,
+            styleInformation:
+                BigTextStyleInformation("First at ${periods.first.startTime}\n$lines"),
+          ),
+          iOS: const DarwinNotificationDetails(),
+        ),
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+      );
+
+      for (final period in periods) {
+        final start = _parseTime(period.startTime);
+        final end = _parseTime(period.endTime);
+
+        // ---- at the bell: take attendance ----
+        if (start != null) {
+          await _plugin.zonedSchedule(
+            _facultyStartIdBase + weekday * 100 + period.periodNo,
+            'Take attendance: ${period.subject}',
+            'Class has started'
+            '${period.room.isEmpty ? '' : ' in ${period.room}'}. '
+            'Open AttendX and scan the room.',
+            _nextInstanceOf(
+              weekday: weekday,
+              hour: start.$1,
+              minute: start.$2,
+              leadMinutes: 0,
+            ),
+            details,
+            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+            matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+          );
+        }
+
+        // ---- shortly before the end: last chance ----
+        if (end != null) {
+          await _plugin.zonedSchedule(
+            _facultyEndIdBase + weekday * 100 + period.periodNo,
+            'Class ending: ${period.subject}',
+            'Ends at ${period.endTime}. Mark attendance now if you '
+            'haven\'t — it\'s guesswork once the room empties.',
+            _nextInstanceOf(
+              weekday: weekday,
+              hour: end.$1,
+              minute: end.$2,
+              leadMinutes: _wrapUpLeadMinutes,
+            ),
+            details,
+            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+            matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+          );
+        }
+      }
+    }
+  }
+
+  /// Loads a faculty member's week from the timetable and schedules the
+  /// reminders above.
+  ///
+  /// Their timetable isn't stored per-teacher — it's per year, with a
+  /// facultyId on each period — so their week is assembled by reading
+  /// all four years and keeping what names them.
+  Future<void> bootstrapForFaculty({
+    required String uid,
+    required String facultyId,
+    required String department,
+  }) async {
+    if (kIsWeb || facultyId.isEmpty) return;
+
+    await init();
+    startRealtimeListener(uid);
+
+    try {
+      final weekSchedule = <String, List<PeriodModel>>{};
+
+      for (final day in AppConfig.weekDays) {
+        final mine = <PeriodModel>[];
+
+        for (var year = 1; year <= 4; year++) {
+          final periods = await TimetableService.instance.getDaySchedule(
+            department: department,
+            academicYear: AppConfig.academicYear,
+            year: year,
+            day: day,
+          );
+          mine.addAll(periods.where((p) => p.facultyId == facultyId));
+        }
+
+        mine.sort((a, b) => a.startTime.compareTo(b.startTime));
+        weekSchedule[day] = mine;
+      }
+
+      await scheduleFacultyReminders(weekSchedule);
+    } catch (e) {
+      debugPrint('Faculty reminder scheduling failed: $e');
     }
   }
 

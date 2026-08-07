@@ -219,10 +219,21 @@ service cloud.firestore {
     }
 
     // ---------- reference data managed by admins ----------
+    // Every signed-in user reads holidays — attendance can't be computed
+    // without knowing which days were closed, and that runs on every
+    // student's own device.
+    match /holidays/{id}  { allow read: if signedIn(); allow write: if isAdmin(); }
+
     match /batch_config/{id} { allow read: if signedIn(); allow write: if isAdmin(); }
     match /users/{uid}     { allow read: if isSelf(uid) || isAdmin(); allow write: if isAdmin(); }
     match /subjects/{id}   { allow read: if signedIn(); allow write: if isAdmin(); }
-    match /faculty/{id}    { allow read: if signedIn(); allow write: if isAdmin(); }
+    // Readable without signing in: the faculty registration form offers
+    // a "find your name" dropdown, and that screen is reached before an
+    // account exists. The contents — staff names, initials, designations
+    // and employee IDs — are already printed on every timetable, so
+    // there is nothing here a signed-out reader couldn't see on a
+    // noticeboard. Writes stay admin-only.
+    match /faculty/{id}    { allow read: if true; allow write: if isAdmin(); }
     match /rooms/{id}      { allow read: if signedIn(); allow write: if isAdmin(); }
     match /labs/{id}       { allow read: if signedIn(); allow write: if isAdmin(); }
     match /time_slots/{id} { allow read: if signedIn(); allow write: if isAdmin(); }

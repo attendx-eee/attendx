@@ -11,6 +11,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_radius.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/section_header.dart';
+import '../../notifications/services/local_notification_service.dart';
 import '../../screens/face_enrollment_screen.dart';
 // ScanProfile lives here, not in the enrollment screen. Dart imports
 // aren't transitive, so importing the screen alone doesn't bring the
@@ -71,6 +72,16 @@ class _FacultyHomeState extends State<FacultyHome> {
   void initState() {
     super.initState();
     _load();
+
+    // Nothing scheduled faculty notifications before: the only caller
+    // was the student dashboard, which a faculty account never reaches.
+    if (widget.account.isApproved) {
+      LocalNotificationService.instance.bootstrapForFaculty(
+        uid: widget.account.uid,
+        facultyId: widget.account.facultyId,
+        department: _department,
+      );
+    }
   }
 
   Future<void> _load() async {
