@@ -54,8 +54,14 @@ class ScanCoach {
   /// scan feel unresponsive rather than calm.
   static const Duration _confirmAfter = Duration(milliseconds: 500);
 
-  /// A face this close to the frame edge is probably clipped.
-  static const double _edgeMargin = 0.04;
+  /// How close to the frame edge counts as clipped, as a fraction of the
+  /// frame.
+  ///
+  /// Deliberately small. This fires only when the face box genuinely
+  /// reaches the boundary — a generous margin turns "sitting near the
+  /// top of the preview" into "your face is cut off", which is both
+  /// wrong and impossible to act on when the face is plainly whole.
+  static const double _edgeMargin = 0.01;
 
   CoachIssue _current = CoachIssue.noFace;
 
@@ -162,7 +168,7 @@ class ScanCoach {
         CoachIssue.multipleFaces =>
           'More than one face — only you should be in view',
         CoachIssue.partiallyOutOfFrame =>
-          'Only part of your face is visible — fit it all in the circle',
+          'Your face is at the edge — move it into view',
         CoachIssue.tooDark => 'Too dark — face a window or turn a light on',
         CoachIssue.tooBright =>
           'Too bright — move out of direct light or glare',
@@ -181,7 +187,7 @@ class ScanCoach {
         CoachIssue.multipleFaces =>
           'Someone else in shot could be enrolled by mistake',
         CoachIssue.partiallyOutOfFrame =>
-          'A cut-off face can\'t be matched later',
+          'The camera needs your whole face in shot',
         CoachIssue.tooDark || CoachIssue.tooBright =>
           'Even, indirect light works best',
         CoachIssue.tooFar || CoachIssue.tooClose =>

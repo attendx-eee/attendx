@@ -357,6 +357,23 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
     // student deserves to be told that rather than left guessing.
     var hadOptions = true;
 
+    // Fresh streams for this dialog — deliberately NOT the shared
+    // `subjectsStream` / `facultyStream` / ... fields.
+    //
+    // Those are already subscribed by _buildAddPeriodForm, which is part
+    // of the main build. Firestore's snapshots() is single-subscription,
+    // so listening a second time throws "Stream has already been
+    // listened to", every StreamBuilder here lands in its error state,
+    // and `snapshot.data ?? []` quietly turns that into empty dropdowns.
+    //
+    // Nothing looked broken; the form simply had nothing to offer and no
+    // way to say why.
+    final dialogSubjects =
+        MasterDataService.instance.getSubjectsByYear(_selectedYear);
+    final dialogLabs = MasterDataService.instance.getLabsByYear(_selectedYear);
+    final dialogFaculty = MasterDataService.instance.getFaculty();
+    final dialogRooms = MasterDataService.instance.getRooms();
+
     await showDialog(
       context: context,
       builder: (context) {
@@ -382,22 +399,22 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
             child: Builder(
               builder: (context) {
                 return StreamBuilder<List<SubjectModel>>(
-                  stream: subjectsStream,
+                  stream: dialogSubjects,
                   builder: (context, subjectsSnapshot) {
                     final subjects = subjectsSnapshot.data ?? [];
 
                     return StreamBuilder<List<LabModel>>(
-                      stream: labsStream,
+                      stream: dialogLabs,
                       builder: (context, labsSnapshot) {
                         final labs = labsSnapshot.data ?? [];
 
                         return StreamBuilder<List<FacultyModel>>(
-                          stream: facultyStream,
+                          stream: dialogFaculty,
                           builder: (context, facultySnapshot) {
                             final faculty = facultySnapshot.data ?? [];
 
                             return StreamBuilder<List<RoomModel>>(
-                              stream: roomsStream,
+                              stream: dialogRooms,
                               builder: (context, roomsSnapshot) {
                                 final rooms = roomsSnapshot.data ?? [];
 
@@ -418,11 +435,58 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
                                     rooms.isNotEmpty &&
                                     (isLab ? labs.isNotEmpty : subjects.isNotEmpty);
 
+                                // An empty dropdown looks identical
+                                // whether the list is genuinely empty or
+                                // the read was refused — and the second
+                                // case is the one that needs a different
+                                // fix, so it's worth telling them apart.
+                                final failed = [
+                                  subjectsSnapshot,
+                                  labsSnapshot,
+                                  facultySnapshot,
+                                  roomsSnapshot,
+                                ].where((s) => s.hasError).toList();
+
+                                final loadFailed = failed.isNotEmpty
+                                    ? failed.first.error.toString()
+                                    : null;
+
+                                final stillLoading = [
+                                  subjectsSnapshot,
+                                  labsSnapshot,
+                                  facultySnapshot,
+                                  roomsSnapshot,
+                                ].any((s) =>
+                                    s.connectionState ==
+                                    ConnectionState.waiting);
+
                                 return SingleChildScrollView(
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      if (!hadOptions) ...[
+                                      if (loadFailed != null) ...[
+                                        Container(
+                                          width: double.infinity,
+                                          padding: const EdgeInsets.all(12),
+                                          margin: const EdgeInsets.only(bottom: 12),
+                                          decoration: BoxDecoration(
+                                            color: AppColors.danger.withValues(alpha: .1),
+                                            borderRadius: BorderRadius.circular(AppRadius.sm),
+                                            border: Border.all(
+                                                color: AppColors.danger.withValues(alpha: .3)),
+                                          ),
+                                          child: Text(
+                                            "Couldn't load the lists: $loadFailed",
+                                            style: AppTextStyles.caption
+                                                .copyWith(color: AppColors.danger),
+                                          ),
+                                        ),
+                                      ] else if (stillLoading) ...[
+                                        const Padding(
+                                          padding: EdgeInsets.only(bottom: 12),
+                                          child: LinearProgressIndicator(minHeight: 2),
+                                        ),
+                                      ] else if (!hadOptions) ...[
                                         Container(
                                           width: double.infinity,
                                           padding: const EdgeInsets.all(12),
@@ -432,9 +496,10 @@ class _TimetableManagementScreenState extends State<TimetableManagementScreen> {
                                             borderRadius: BorderRadius.circular(AppRadius.sm),
                                           ),
                                           child: Text(
-                                            'Some lists are empty. Add subjects, labs, '
-                                            'faculty and rooms under Master Data before '
-                                            'building the timetable.',
+                                            'Nothing to choose from yet. Add '
+                                            '${isLab ? 'labs' : 'subjects'}, faculty and rooms '
+                                            'under Master Data first — this form can only offer '
+                                            'what exists there.',
                                             style: AppTextStyles.caption,
                                           ),
                                         ),

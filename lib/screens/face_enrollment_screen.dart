@@ -361,9 +361,17 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
       // out of shot.
       _issue = _coach.update(ScanCoach.diagnose(
         faceCount: 1,
-        faceBox: face.boundingBox,
-        frame: Size(cameraImage.width.toDouble(),
-            cameraImage.height.toDouble()),
+        // The transformed rect and the preview size, NOT the raw
+        // bounding box and the camera buffer.
+        //
+        // ML Kit reports the face in an upright coordinate space, while
+        // `cameraImage.width/height` is the sensor buffer — landscape on
+        // most Android phones. Comparing a portrait box against
+        // landscape dimensions made every face look clipped by the
+        // bottom edge, so the scan permanently complained that only part
+        // of the face was visible while showing a perfectly framed one.
+        faceBox: transformedFaceRect,
+        frame: previewSize,
         brightness: null, // measured on the crop, fed in below
         occupancy: _lastOccupancy,
         centerOffset: _lastCenterOffset,
