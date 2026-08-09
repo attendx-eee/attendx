@@ -127,6 +127,15 @@ class AdminWebApp extends StatelessWidget {
       title: 'AttendX Admin',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
+      // Seeds Responsive once, above every route, so no screen further
+      // down can be reached without it. Individual screens still call
+      // init themselves — this is the safety net, not the mechanism.
+      // The whole console went blank because one screen was reachable
+      // without it and read a text style on the way in.
+      builder: (context, child) {
+        Responsive.init(context);
+        return child ?? const SizedBox.shrink();
+      },
       home: const _AuthGate(),
     );
   }
