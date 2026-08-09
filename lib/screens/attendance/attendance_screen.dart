@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../admin/services/holiday_service.dart';
 import '../../core/constants/app_config.dart';
 import '../../core/responsive/responsive.dart';
 import '../../core/theme/app_spacing.dart';
@@ -42,6 +43,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   // Current month
   Map<int, String> _calendarStatuses = {};
   Map<int, String> _calendarFractions = {};
+  Map<int, double> _calendarRatios = {};
+  Map<int, String> _calendarHolidays = {};
   String _monthLabel = '';
 
   /// Per-period totals for the current month. Empty until any faculty
@@ -97,6 +100,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       final department = AppConfig.departmentOf(student);
       final year = AppConfig.yearOf(student);
 
+      // Filled before any day is judged. The per-day check is
+      // synchronous, and an unloaded cache reports every holiday as a
+      // working day — which would mark the whole class absent for
+      // Independence Day.
+      await HolidayService.instance.all();
+
       final events = await _service.eventsFor(uid);
 
       // Corrections an admin (or an approved CR) made by hand. Without
@@ -148,6 +157,19 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       int presentDays = 0, absentDays = 0, totalDays = 0;
       final calendar = <int, String>{};
       final fractions = <int, String>{};
+      final ratios = <int, double>{};
+      final holidays = <int, String>{};
+
+      // Holidays are collected over the whole month, not just the days
+      // the loop below judges — a closure the student didn't attend
+      // still has to be visible on the grid, and the loop skips days
+      // with no scheduled periods, which is exactly what a holiday is.
+      final daysThisMonth = DateTime(today.year, today.month + 1, 0).day;
+      for (var d = 1; d <= daysThisMonth; d++) {
+        final reason = HolidayService.instance
+            .closureReason(DateTime(today.year, today.month, d), year: year);
+        if (reason != null) holidays[d] = reason;
+      }
 
       for (var date = start;
           !date.isAfter(today);
@@ -211,6 +233,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
           if (marks != null) {
             fractions[date.day] = marks.fraction;
+            ratios[date.day] = marks.ratio;
           }
 
           if (isToday) {
@@ -370,6 +393,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
         _calendarStatuses = calendar;
         _calendarFractions = fractions;
+        _calendarRatios = ratios;
+        _calendarHolidays = holidays;
         _periodTotals = periodTotals;
         _monthLabel = DateFormat('MMMM yyyy').format(today);
 
@@ -471,6 +496,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             monthLabel: _monthLabel,
                             dayStatuses: _calendarStatuses,
                             dayFractions: _calendarFractions,
+                            dayRatios: _calendarRatios,
+                            dayHolidays: _calendarHolidays,
                           ),
                           if (_periodTotals.total > 0) ...[
                             SizedBox(height: Responsive.h(20)),

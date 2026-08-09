@@ -63,8 +63,16 @@ class DayVerdict {
 
   bool get isManual => manual != null;
 
-  bool get isMarkable =>
-      status != DayStatus.upcoming || manual != null;
+  /// Whether a status can be applied to this day at all.
+  ///
+  /// A closed day is excluded outright — not merely discouraged in the
+  /// UI — so bulk selection can't sweep a holiday up with the working
+  /// days around it. The exception is a day someone has *already* marked
+  /// by hand, which stays editable so the mark can be removed.
+  bool get isMarkable {
+    if (isHoliday && manual == null) return false;
+    return status != DayStatus.upcoming || manual != null;
+  }
 }
 
 class AttendanceService {

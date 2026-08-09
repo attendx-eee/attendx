@@ -8,6 +8,7 @@ import '../../core/responsive/responsive.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_radius.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/theme/attendance_palette.dart';
 import '../../faculty/services/period_attendance_service.dart';
 import '../../services/attendance_service.dart';
 import '../models/attendance_marker.dart';
@@ -448,6 +449,24 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
     }
   }
 
+  /// One line explaining what kind of closure this is.
+  String _holidayNote(DateTime date) {
+    final stored = HolidayService.instance.on(date);
+
+    if (stored == null) {
+      // Sunday and second Saturday are rules rather than records.
+      return 'A standing weekly closure. Attendance is not counted and '
+          'cannot be marked.';
+    }
+
+    final parts = <String>[
+      if (stored.reason.isNotEmpty) stored.reason,
+      'Attendance is not counted for this day.',
+    ];
+
+    return parts.join('  •  ');
+  }
+
   /// Turns a stored holiday back into a working day.
   ///
   /// The counterpart to declaring one — a date entered by mistake, or a
@@ -581,7 +600,10 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
   /// Bottom sheet for one day: what it currently resolves to, who set it
   /// if it was set by hand, and the three status buttons.
   void _openDaySheet(DayVerdict verdict, bool canMark) {
-    if (!canMark) {
+    // A holiday always opens, even though it can't be marked — the whole
+    // point is to answer "why is this day grey", and a snackbar saying
+    // "you can't mark this" answers the wrong question.
+    if (!canMark && !verdict.isHoliday) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(widget.marker.isAdmin
@@ -635,33 +657,51 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
                   style: AppTextStyles.title,
                 ),
                 SizedBox(height: Responsive.h(4)),
-                Text(
-                  "$_studentName • Currently "
-                  "${_statusText(verdict.status).toLowerCase()}",
-                  style: AppTextStyles.caption,
-                ),
+                if (!verdict.isHoliday)
+                  Text(
+                    "$_studentName • Currently "
+                    "${_statusText(verdict.status).toLowerCase()}",
+                    style: AppTextStyles.caption,
+                  ),
+
+                // A holiday isn't an attendance question, so the sheet
+                // stops being a marking form and becomes an explanation.
+                // Offering Present / Late / Absent on a day the college
+                // was shut invites a mark that would be meaningless and
+                // then has to be undone.
                 if (verdict.isHoliday) ...[
                   SizedBox(height: Responsive.h(10)),
                   Container(
                     width: double.infinity,
-                    padding: Responsive.all(12),
+                    padding: Responsive.all(14),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFE7EBFF),
+                      color: holidayFill.withValues(alpha: .10),
                       borderRadius: BorderRadius.circular(AppRadius.sm),
+                      border: Border.all(
+                          color: holidayFill.withValues(alpha: .35)),
                     ),
                     child: Row(
                       children: [
                         Icon(Icons.beach_access_rounded,
-                            size: Responsive.sp(17),
-                            color: AppColors.primaryDark),
-                        SizedBox(width: Responsive.w(8)),
+                            size: Responsive.sp(20), color: holidayFill),
+                        SizedBox(width: Responsive.w(10)),
                         Expanded(
-                          child: Text(
-                            'College closed — ${verdict.closureReason}',
-                            style: AppTextStyles.caption.copyWith(
-                              color: AppColors.primaryDark,
-                              fontWeight: FontWeight.w700,
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                verdict.closureReason ?? 'Holiday',
+                                style: AppTextStyles.title.copyWith(
+                                  fontSize: Responsive.sp(14),
+                                  color: holidayFill,
+                                ),
+                              ),
+                              SizedBox(height: Responsive.h(3)),
+                              Text(
+                                _holidayNote(verdict.date),
+                                style: AppTextStyles.caption,
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -711,96 +751,98 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
                     ),
                   ),
                 ],
-                SizedBox(height: Responsive.h(16)),
-                TextField(
-                  controller: reasonController,
-                  decoration: InputDecoration(
-                    labelText: "Reason (optional)",
-                    hintText: "On duty, medical leave, scanner down…",
-                    hintStyle: AppTextStyles.caption,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                if (!verdict.isHoliday) ...[
+                  SizedBox(height: Responsive.h(16)),
+                  TextField(
+                    controller: reasonController,
+                    decoration: InputDecoration(
+                      labelText: "Reason (optional)",
+                      hintText: "On duty, medical leave, scanner down…",
+                      hintStyle: AppTextStyles.caption,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppRadius.sm),
+                      ),
+                      contentPadding:
+                          Responsive.symmetric(horizontal: 14, vertical: 12),
                     ),
-                    contentPadding:
-                        Responsive.symmetric(horizontal: 14, vertical: 12),
                   ),
-                ),
-                SizedBox(height: Responsive.h(16)),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _StatusButton(
-                        label: "Present",
-                        color: AppColors.success,
-                        selected: verdict.manual?.status ==
-                            ManualAttendanceStatus.present,
-                        onTap: () {
-                          Navigator.pop(sheetContext);
-                          _mark(verdict, ManualAttendanceStatus.present,
-                              reasonController.text.trim());
-                        },
-                      ),
-                    ),
-                    SizedBox(width: Responsive.w(10)),
-                    Expanded(
-                      child: _StatusButton(
-                        label: "Late",
-                        color: AppColors.warning,
-                        selected: verdict.manual?.status ==
-                            ManualAttendanceStatus.late,
-                        onTap: () {
-                          Navigator.pop(sheetContext);
-                          _mark(verdict, ManualAttendanceStatus.late,
-                              reasonController.text.trim());
-                        },
-                      ),
-                    ),
-                    SizedBox(width: Responsive.w(10)),
-                    Expanded(
-                      child: _StatusButton(
-                        label: "Absent",
-                        color: AppColors.danger,
-                        selected: verdict.manual?.status ==
-                            ManualAttendanceStatus.absent,
-                        onTap: () {
-                          Navigator.pop(sheetContext);
-                          _mark(verdict, ManualAttendanceStatus.absent,
-                              reasonController.text.trim());
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                // The in-between case the three buttons above can't
-                // express. Present and Absent are whole-day verdicts;
-                // this is where a day becomes "1 of 2", by naming which
-                // class was attended rather than implying it.
-                if (widget.marker.isAdmin) ...[
-                  SizedBox(height: Responsive.h(10)),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(sheetContext);
-                        _openClassSheet(verdict.date);
-                      },
-                      icon: const Icon(Icons.checklist_rounded, size: 18),
-                      label: const Text('Mark individual classes'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.primary,
-                        padding: Responsive.symmetric(vertical: 13),
-                        side: BorderSide(
-                            color:
-                                AppColors.primary.withValues(alpha: .45)),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(AppRadius.sm),
+                  SizedBox(height: Responsive.h(16)),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _StatusButton(
+                          label: "Present",
+                          color: AppColors.success,
+                          selected: verdict.manual?.status ==
+                              ManualAttendanceStatus.present,
+                          onTap: () {
+                            Navigator.pop(sheetContext);
+                            _mark(verdict, ManualAttendanceStatus.present,
+                                reasonController.text.trim());
+                          },
                         ),
                       ),
-                    ),
+                      SizedBox(width: Responsive.w(10)),
+                      Expanded(
+                        child: _StatusButton(
+                          label: "Late",
+                          color: AppColors.warning,
+                          selected: verdict.manual?.status ==
+                              ManualAttendanceStatus.late,
+                          onTap: () {
+                            Navigator.pop(sheetContext);
+                            _mark(verdict, ManualAttendanceStatus.late,
+                                reasonController.text.trim());
+                          },
+                        ),
+                      ),
+                      SizedBox(width: Responsive.w(10)),
+                      Expanded(
+                        child: _StatusButton(
+                          label: "Absent",
+                          color: AppColors.danger,
+                          selected: verdict.manual?.status ==
+                              ManualAttendanceStatus.absent,
+                          onTap: () {
+                            Navigator.pop(sheetContext);
+                            _mark(verdict, ManualAttendanceStatus.absent,
+                                reasonController.text.trim());
+                          },
+                        ),
+                      ),
+                      // The in-between case the other three can't express.
+                      // Present and Absent are whole-day verdicts; Partial
+                      // opens the day's timetable so the answer names which
+                      // classes were attended rather than implying it.
+                      if (widget.marker.isAdmin) ...[
+                        SizedBox(width: Responsive.w(10)),
+                        Expanded(
+                          child: _StatusButton(
+                            label: "Partial",
+                            color: Colors.amber.shade700,
+                            selected: summary != null &&
+                                summary.status == DayAttendance.partial,
+                            onTap: () {
+                              Navigator.pop(sheetContext);
+                              _openClassSheet(verdict.date);
+                            },
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
+                  if (widget.marker.isAdmin) ...[
+                    SizedBox(height: Responsive.h(6)),
+                    Text(
+                      'Partial opens the day\'s classes — tick the ones '
+                      'attended. Tick them all and the day counts as full '
+                      'present.',
+                      style: AppTextStyles.caption,
+                    ),
+                  ],
                 ],
 
-                if (verdict.manual != null) ...[
+                if (verdict.manual != null && !verdict.isHoliday) ...[
                   SizedBox(height: Responsive.h(8)),
                   Center(
                     child: TextButton.icon(
@@ -1334,7 +1376,10 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
                 verdict: verdict,
                 summary: _periodDays[day],
                 isToday: isToday,
-                enabled: markable,
+                // A holiday isn't dimmed. It can't be marked, but it's a
+                // deliberate, meaningful state rather than a disabled
+                // one, and fading it would read as "not loaded yet".
+                enabled: markable || verdict.isHoliday,
                 selected: _selectedDays.contains(day),
                 onTap: () {
                   if (_selecting) {
@@ -1458,10 +1503,11 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
       runSpacing: Responsive.h(10),
       children: [
         const _LegendDot(color: AppColors.success, label: "All classes"),
-        _LegendDot(color: Colors.amber.shade600, label: "Some classes"),
-        const _LegendDot(color: AppColors.danger, label: "Absent"),
+        _LegendDot(
+            color: attendanceShade(0.5), label: "Part of the day"),
+        const _LegendDot(color: AppColors.danger, label: "None attended"),
         const _LegendDot(color: AppColors.warning, label: "Late"),
-        const _LegendDot(color: Color(0xFFE7EBFF), label: "Holiday"),
+        const _LegendDot(color: holidayFill, label: "Holiday"),
         const _LegendDot(color: AppColors.divider, label: "No class"),
         const _LegendDot(
             color: AppColors.primary, label: "Dot = marked by hand"),
@@ -1635,37 +1681,23 @@ class _DayCell extends StatelessWidget {
     Color fill = baseFill;
     Color text = baseText;
 
-    // A closed day is not the same as a day with an empty timetable, and
-    // showing both as blank grey is why holidays were invisible here.
-    // Colour wins over the verdict: if the college was shut, no amount
-    // of missing check-in makes it an absence.
-    if (verdict.isHoliday && verdict.manual == null) {
-      fill = const Color(0xFFE7EBFF);
-      text = AppColors.primaryDark;
-    }
-
-    // Registers beat the gate. A day the scanner called present is
-    // still only half a day if half the classes were missed, and the
-    // colour has to say so or the fraction underneath contradicts it.
+    // Registers beat the gate, and the shade carries the percentage:
+    // red at nothing attended, amber at half, green at all of it. A flat
+    // colour would make 1-of-6 and 5-of-6 look alike.
     final marks = (summary != null && summary!.marked > 0) ? summary : null;
 
     if (marks != null) {
-      switch (marks.status) {
-        case DayAttendance.partial:
-          fill = Colors.amber.shade600;
-          text = Colors.white;
-        case DayAttendance.absent:
-          fill = AppColors.danger;
-          text = Colors.white;
-        case DayAttendance.full:
-          if (verdict.status != DayStatus.late) {
-            fill = AppColors.success;
-            text = Colors.white;
-          }
-        case DayAttendance.noClass:
-        case DayAttendance.notMarked:
-          break;
-      }
+      fill = attendanceShade(marks.ratio);
+      text = Colors.white;
+    }
+
+    // A closed day is not the same as a day with an empty timetable, and
+    // showing both as blank grey is why holidays were invisible here.
+    // Dark grey, and it wins over everything below it: if the college
+    // was shut, no amount of missing check-in makes it an absence.
+    if (verdict.isHoliday) {
+      fill = holidayFill;
+      text = Colors.white;
     }
 
     return Material(

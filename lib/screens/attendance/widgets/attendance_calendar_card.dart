@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../core/responsive/responsive.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/attendance_palette.dart';
 
 class AttendanceCalendarCard extends StatelessWidget {
   /// Month being displayed.
@@ -19,6 +20,13 @@ class AttendanceCalendarCard extends StatelessWidget {
   /// point of counting periods instead of days.
   final Map<int, String> dayFractions;
 
+  /// day-of-month -> 0..1, how much of the day was attended. Drives the
+  /// shade so a 5-of-6 day reads greener than a 1-of-6 one.
+  final Map<int, double> dayRatios;
+
+  /// day-of-month -> why the college was closed.
+  final Map<int, String> dayHolidays;
+
   const AttendanceCalendarCard({
     super.key,
     required this.year,
@@ -26,6 +34,8 @@ class AttendanceCalendarCard extends StatelessWidget {
     required this.monthLabel,
     this.dayStatuses = const {},
     this.dayFractions = const {},
+    this.dayRatios = const {},
+    this.dayHolidays = const {},
   });
 
   @override
@@ -115,6 +125,7 @@ class AttendanceCalendarCard extends StatelessWidget {
               Color color = Colors.transparent;
               Color text = Colors.black87;
               final fraction = dayFractions[day];
+              final holiday = dayHolidays[day];
 
               switch (dayStatuses[day]) {
                 case 'present':
@@ -122,7 +133,7 @@ class AttendanceCalendarCard extends StatelessWidget {
                   text = Colors.white;
                   break;
                 case 'partial':
-                  color = Colors.amber.shade600;
+                  color = attendanceShade(dayRatios[day] ?? .5);
                   text = Colors.white;
                   break;
                 case 'absent':
@@ -137,6 +148,13 @@ class AttendanceCalendarCard extends StatelessWidget {
                   color = Colors.blue;
                   text = Colors.white;
                   break;
+              }
+
+              // A closed day outranks whatever the gate recorded — the
+              // college wasn't open, so there was nothing to attend.
+              if (holiday != null) {
+                color = holidayFill;
+                text = Colors.white;
               }
 
               return Container(
@@ -161,7 +179,10 @@ class AttendanceCalendarCard extends StatelessWidget {
                         fontSize: Responsive.sp(12),
                       ),
                     ),
-                    if (fraction != null)
+                    if (holiday != null)
+                      Icon(Icons.beach_access_rounded,
+                          size: Responsive.sp(9), color: Colors.white)
+                    else if (fraction != null)
                       Text(
                         fraction,
                         maxLines: 1,
@@ -192,8 +213,13 @@ class AttendanceCalendarCard extends StatelessWidget {
               ),
 
               _Legend(
-                Colors.amber.shade600,
-                "Some classes",
+                attendanceShade(.5),
+                "Part of the day",
+              ),
+
+              const _Legend(
+                holidayFill,
+                "Holiday",
               ),
 
               const _Legend(

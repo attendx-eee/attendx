@@ -57,6 +57,99 @@ class _StudentDirectoryScreenState extends State<StudentDirectoryScreen> {
     return has('name') || has('regNo') || has('email') || has('mobile');
   }
 
+  /// Removes a student record.
+  ///
+  /// Mostly for the debris a sign-up flow leaves behind — a half-created
+  /// document with no name and no register number, which otherwise sits
+  /// in the year list forever and skews every count on the Analysis
+  /// page. Deliberately admin-only and deliberately noisy: the dialog
+  /// names the record and says plainly what survives, because deleting
+  /// a real student here would be silent and unrecoverable.
+  Future<void> _deleteStudent(
+      String uid, Map<String, dynamic> data) async {
+    final name = (data['name'] ?? '').toString().trim();
+    final regNo = (data['regNo'] ?? '').toString().trim();
+    final label = name.isEmpty ? 'this unnamed record' : name;
+    final incomplete = name.isEmpty && regNo.isEmpty;
+
+    final go = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            backgroundColor: AppColors.surface,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppRadius.lg)),
+            title: Text('Remove $label?', style: AppTextStyles.title),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  incomplete
+                      ? 'This record has no name and no register number, '
+                          'so it is almost certainly an abandoned sign-up.'
+                      : 'This removes $label'
+                          '${regNo.isEmpty ? '' : ' (Reg $regNo)'} from the '
+                          'directory. Their attendance history stays, but '
+                          'nothing will link to it.',
+                  style: AppTextStyles.caption,
+                ),
+                SizedBox(height: Responsive.h(10)),
+                Text(
+                  'Their login account is not deleted — that is done from '
+                  'the Firebase console.',
+                  style: AppTextStyles.caption
+                      .copyWith(color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Keep',
+                    style: TextStyle(color: AppColors.textSecondary)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.danger,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                ),
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Remove'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!go) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('students')
+          .doc(uid)
+          .delete();
+
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Removed $label from the directory.'),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text("Couldn't remove it: $e"),
+          backgroundColor: AppColors.danger,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   void _openStudent(
     String uid,
     Map<String, dynamic> data,
@@ -166,6 +259,9 @@ class _StudentDirectoryScreenState extends State<StudentDirectoryScreen> {
                               .toLowerCase() ==
                           'cr',
                       onTap: () => _openStudent(doc.id, data),
+                      onDelete: widget.marker.isAdmin
+                          ? () => _deleteStudent(doc.id, data)
+                          : null,
                     );
                   },
                 );
@@ -337,12 +433,17 @@ class _StudentTile extends StatelessWidget {
   final bool isCr;
   final VoidCallback onTap;
 
+  /// Null for anyone who isn't an admin — the row simply has no delete
+  /// affordance rather than one that fails when pressed.
+  final VoidCallback? onDelete;
+
   const _StudentTile({
     required this.name,
     required this.regNo,
     required this.photoUrl,
     required this.isCr,
     required this.onTap,
+    this.onDelete,
   });
 
   String get _initial => name.isNotEmpty ? name[0].toUpperCase() : '?';
@@ -426,6 +527,14 @@ class _StudentTile extends StatelessWidget {
                     ],
                   ),
                 ),
+                if (onDelete != null)
+                  IconButton(
+                    tooltip: 'Remove this record',
+                    onPressed: onDelete,
+                    icon: Icon(Icons.delete_outline_rounded,
+                        size: Responsive.sp(19),
+                        color: AppColors.textSecondary),
+                  ),
                 Container(
                   padding: const EdgeInsets.all(6),
                   decoration: const BoxDecoration(
