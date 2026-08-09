@@ -910,6 +910,13 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
   }
 
   /// Opens the day's timetable so the admin can tick class by class.
+  ///
+  /// Saving per-class marks also drops any whole-day override on that
+  /// date. `classifyDay` gives a manual mark absolute priority, so a day
+  /// previously marked Present would keep reading as a full green
+  /// however the individual classes were ticked — the save succeeded and
+  /// the calendar simply ignored it. Naming which classes were attended
+  /// is a strictly more precise statement than "present", so it wins.
   Future<void> _openClassSheet(DateTime date) async {
     final saved = await DayClassMarkSheet.show(
       context: context,
@@ -922,15 +929,28 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
       markerRole: widget.marker.role,
     );
 
-    if (saved && mounted) {
-      // Nothing the verdict cache keys on has changed, so nudge it or
-      // the day would keep showing its old fraction until the month was
-      // switched away and back.
-      setState(() {
-        _periodRevision++;
-        _verdictKey = null;
-      });
+    if (!saved || !mounted) return;
+
+    try {
+      await ManualAttendanceService.instance.clear(
+        uid: widget.studentUid,
+        date: date,
+        markerName: widget.marker.name,
+      );
+    } catch (e) {
+      // Nothing to clear is the common case, and not a failure.
+      debugPrint('No day-level mark to clear for $date: $e');
     }
+
+    if (!mounted) return;
+
+    // Nothing the verdict cache keys on has changed, so nudge it or
+    // the day would keep showing its old fraction until the month was
+    // switched away and back.
+    setState(() {
+      _periodRevision++;
+      _verdictKey = null;
+    });
   }
 
   // ------------------------------------------------------- CR permission

@@ -86,12 +86,62 @@ class LocalNotificationService {
 
     await _plugin.initialize(initSettings);
 
-    await _plugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+
+    await android?.requestNotificationsPermission();
+
+    // Android 12 introduced a separate permission for exact alarms, and
+    // every schedule below asks for `exactAllowWhileIdle`. Without the
+    // grant the plugin throws `exact_alarms_not_permitted` on the very
+    // first zonedSchedule call — and because the callers wrap
+    // scheduling in a try/catch that only debugPrints, the whole
+    // timetable silently fails to schedule and nothing ever fires.
+    //
+    // Requesting is best-effort: on some OEM builds it opens a settings
+    // screen, on others it's granted at install. Either way the result
+    // is recorded so the settings screen can say what's wrong.
+    try {
+      _exactAlarmsAllowed =
+          await android?.canScheduleExactNotifications() ?? true;
+
+      if (_exactAlarmsAllowed != true) {
+        await android?.requestExactAlarmsPermission();
+        _exactAlarmsAllowed =
+            await android?.canScheduleExactNotifications() ?? false;
+      }
+    } catch (e) {
+      debugPrint('Exact alarm permission check failed: $e');
+      _exactAlarmsAllowed = null;
+    }
 
     _initialized = true;
+  }
+
+  /// Null until [init] has run, then whether the OS will let us schedule
+  /// exact alarms. Surfaced in settings, because "my notifications don't
+  /// work" is otherwise unanswerable from inside the app.
+  bool? _exactAlarmsAllowed;
+
+  bool? get exactAlarmsAllowed => _exactAlarmsAllowed;
+
+  bool get isInitialized => _initialized;
+
+  /// Falls back to inexact scheduling when the OS withholds the exact
+  /// alarm permission.
+  ///
+  /// An inexact alarm can drift by several minutes, which is fine for a
+  /// 7am digest and tolerable for a ten-minute class warning. Silence is
+  /// not fine, and silence is what the exact-only version delivered.
+  AndroidScheduleMode get _scheduleMode => _exactAlarmsAllowed == false
+      ? AndroidScheduleMode.inexactAllowWhileIdle
+      : AndroidScheduleMode.exactAllowWhileIdle;
+
+  /// Everything currently queued with the OS. Used by the settings
+  /// screen to prove scheduling actually happened.
+  Future<List<PendingNotificationRequest>> pending() async {
+    if (kIsWeb) return const [];
+    return _plugin.pendingNotificationRequests();
   }
 
   /// Immediately shows a device notification.
@@ -170,7 +220,7 @@ class LocalNotificationService {
             android: _scheduleChannel,
             iOS: DarwinNotificationDetails(),
           ),
-          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+          androidScheduleMode: _scheduleMode,
           matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
         );
       }
@@ -241,7 +291,7 @@ class LocalNotificationService {
           ),
           iOS: const DarwinNotificationDetails(),
         ),
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        androidScheduleMode: _scheduleMode,
         matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
       );
     }
@@ -325,7 +375,7 @@ class LocalNotificationService {
           ),
           iOS: const DarwinNotificationDetails(),
         ),
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        androidScheduleMode: _scheduleMode,
         matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
       );
 
@@ -348,7 +398,7 @@ class LocalNotificationService {
               leadMinutes: 0,
             ),
             details,
-            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+            androidScheduleMode: _scheduleMode,
             matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
           );
         }
@@ -367,7 +417,7 @@ class LocalNotificationService {
               leadMinutes: _wrapUpLeadMinutes,
             ),
             details,
-            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+            androidScheduleMode: _scheduleMode,
             matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
           );
         }

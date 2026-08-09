@@ -141,20 +141,27 @@ class AttendanceDayTile extends StatelessWidget {
         fontWeight: FontWeight.w800,
         fontSize: cornered ? 10.5 : 12,
         height: 1,
-        // The split puts the number over a white gap between two
-        // coloured halves, where white-on-white would vanish.
-        shadows: _splits
-            ? const [
-                Shadow(color: Colors.black54, blurRadius: 3),
-                Shadow(color: Colors.black38, blurRadius: 6),
-              ]
-            : null,
       ),
     );
 
-    return cornered
-        ? Positioned(top: 3, left: 5, child: label)
-        : Center(child: label);
+    if (!cornered) return Center(child: label);
+
+    return Positioned(
+      top: 3,
+      left: 4,
+      // A dark pill behind the number. Now that the halves fill the tile
+      // edge to edge, the date sits directly on top of one of them — and
+      // that half might be green, red, amber or white depending on the
+      // day, so no single text colour reads against all of them.
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+        decoration: BoxDecoration(
+          color: _splits ? Colors.black38 : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: label,
+      ),
+    );
   }
 
   Widget _buildHoliday(bool compact) {
@@ -216,11 +223,15 @@ class AttendanceDayTile extends StatelessWidget {
 
     return Positioned.fill(
       child: Row(
+        // Stretch, not the default centre. A Row centres its children
+        // vertically and lets them size to their content, so each half
+        // was rendering as a short coloured band floating in the middle
+        // of a white tile instead of filling its side of it.
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (var i = 0; i < halves.length; i++) ...[
             if (i > 0)
-              const VerticalDivider(
-                  width: 1, thickness: 1, color: Colors.white54),
+              const SizedBox(width: 1, child: ColoredBox(color: Colors.white)),
             halves[i],
           ],
         ],

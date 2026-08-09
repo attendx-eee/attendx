@@ -480,21 +480,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final String role = (data['role'] ?? 'student').toString().toLowerCase();
     final bool isCR = role == 'cr';
 
-    // Only the headline percentage is needed here now — the present /
-    // absent / total split it comes from is shown once, on the
-    // Attendance page.
-    final totalPresent = attendanceStats.values.fold(
-      0,
-      (acc, item) => acc + item["present"]!,
-    );
-
-    final totalClasses = attendanceStats.values.fold(
-      0,
-      (acc, item) => acc + item["total"]!,
-    );
-
+    // One shared roll-up, so this alert and the Attendance page can't
+    // quote different figures for the same student.
     final attendancePercentage =
-        totalClasses == 0 ? 0.0 : (totalPresent / totalClasses) * 100;
+        AttendanceService.rollUp(attendanceStats).percent;
 
     return Scaffold(
       backgroundColor: AppColors.background,

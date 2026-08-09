@@ -205,6 +205,39 @@ class AttendanceService {
     );
   }
 
+  /// Rolls a [semesterStats] map up into one headline figure.
+  ///
+  /// Exists so the dashboard's alert and the attendance page's summary
+  /// can't disagree. They used to compute the total independently — the
+  /// dashboard summed these months, the attendance page ran its own day
+  /// loop with slightly different rules about today and about days with
+  /// no timetable — and reported 71.9% and 67.6% for the same student on
+  /// the same afternoon. Whichever number is right, showing both is
+  /// worse than either.
+  ///
+  /// A late day counts as present. Punctuality is reported separately,
+  /// not deducted twice.
+  static ({int present, int absent, int late, int total, double percent})
+      rollUp(Map<String, Map<String, int>> stats) {
+    var present = 0, absent = 0, late = 0;
+
+    for (final month in stats.values) {
+      present += month['present'] ?? 0;
+      absent += month['absent'] ?? 0;
+      late += month['late'] ?? 0;
+    }
+
+    final total = present + absent;
+
+    return (
+      present: present,
+      absent: absent,
+      late: late,
+      total: total,
+      percent: total == 0 ? 0 : (present / total) * 100,
+    );
+  }
+
   /// Real monthly attendance for the semester, replacing hardcoded stats.
   ///
   /// Returns {monthName: {present, absent, total, late}} for every month

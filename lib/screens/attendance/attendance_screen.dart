@@ -35,11 +35,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   bool _loading = true;
 
-  // Overall (semester to date)
-  int _presentDays = 0;
-  int _absentDays = 0;
-  int _totalDays = 0;
-
   // Current month
   Map<int, String> _calendarStatuses = {};
   Map<int, DaySummary> _calendarSummaries = {};
@@ -153,7 +148,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       // Per-subject tallies: subject -> [attended, total]
       final subjectTotals = <String, List<int>>{};
 
-      int presentDays = 0, absentDays = 0, totalDays = 0;
       final calendar = <int, String>{};
       final holidays = <int, String>{};
 
@@ -174,10 +168,14 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         final weekday = AppConfig.dayName(date);
         if (weekday == 'Sunday') continue;
 
+        // `on:` matters — without it the holiday calendar is skipped and
+        // closed days get counted as missed classes in the subject
+        // tallies and the history list.
         final periods = await _service.scheduledPeriods(
           department: department,
           year: year,
           weekday: weekday,
+          on: date,
         );
 
         final dateId = AppConfig.dateId(date);
@@ -205,16 +203,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         final isToday = AppConfig.dateId(date) == todayId;
         final isCurrentMonth =
             date.month == today.month && date.year == today.year;
-
-        // Overall day counts (today counts once it has an outcome).
-        totalDays++;
-        if (verdict.present) {
-          presentDays++;
-        } else if (!isToday) {
-          absentDays++;
-        } else {
-          totalDays--; // today, not checked in yet — don't judge it
-        }
 
         // Current month calendar colouring.
         //
@@ -310,6 +298,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             department: department,
             year: year,
             weekday: weekday,
+            on: cursor,
           );
           if (periods.isNotEmpty) {
             final event = events[AppConfig.dateId(cursor)];
@@ -361,10 +350,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
       if (!mounted) return;
       setState(() {
-        _presentDays = presentDays;
-        _absentDays = absentDays;
-        _totalDays = totalDays;
-
         _calendarStatuses = calendar;
         // Every day of the month that has a timetable, not just the
         // marked ones — a tile has to show "0/2 theory, not registered"
@@ -391,8 +376,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   @override
   Widget build(BuildContext context) {
     final today = DateTime.now();
-    final percentage =
-        _totalDays == 0 ? 0.0 : (_presentDays * 100 / _totalDays);
+
+    // Derived from the same monthly map the dashboard alert uses, not
+    // from this screen's own day loop. The two loops disagreed about
+    // today and about days with no timetable, and quoted 71.9% and
+    // 67.6% for the same student.
+    final overall = AttendanceService.rollUp(_semesterAttendance);
 
     return Scaffold(
       backgroundColor: const Color(0xffF6F8FC),
@@ -446,10 +435,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       delegate: SliverChildListDelegate(
                         [
                           AttendanceSummaryCard(
-                            attendancePercentage: percentage,
-                            presentDays: _presentDays,
-                            absentDays: _absentDays,
-                            totalDays: _totalDays,
+                            attendancePercentage: overall.percent,
+                            presentDays: overall.present,
+                            absentDays: overall.absent,
+                            totalDays: overall.total,
                           ),
                           SizedBox(height: Responsive.h(20)),
                           AttendanceOverviewCard(

@@ -8,6 +8,8 @@ import '../core/constants/app_config.dart';
 import '../services/update_service.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_radius.dart';
+import '../notifications/services/local_notification_service.dart';
+import '../notifications/widgets/notification_health_card.dart';
 import '../screens/face_enrollment_screen.dart';
 import '../screens/face_verification_screen.dart';
 import '../screens/login.dart';
@@ -1121,6 +1123,14 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                 textAlign: TextAlign.center,
                 style:
                     TextStyle(fontSize: 11.5, color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 18),
+              NotificationHealthCard(
+                onReschedule: () =>
+                    LocalNotificationService.instance.bootstrapForStudent(
+                  uid: FirebaseAuth.instance.currentUser?.uid ?? '',
+                  studentData: widget.student,
+                ),
               ),
               const SizedBox(height: 18),
               _buildUpdateCard(),
