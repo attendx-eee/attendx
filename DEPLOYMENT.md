@@ -1,19 +1,36 @@
 # AttendX — Deployment Guide
 
-Two things ship from the same free GitHub Pages site:
+Three things ship from the same free GitHub Pages site:
 
 | URL | What it is |
 |-----|------------|
-| `https://ganga2006.github.io/attendx/` | APK download page (`docs/`) |
-| `https://ganga2006.github.io/attendx/admin/` | Admin console (built from `lib/main_web.dart`) |
+| `https://ganga2006.github.io/attendx/` | Download page (`docs/`) — detects iOS vs Android |
+| `https://ganga2006.github.io/attendx/admin/` | Staff console (`lib/main_web.dart`) |
+| `https://ganga2006.github.io/attendx/app/` | Student web app (`lib/main_student_web.dart`) |
+
+### Why there are three entry points
+
+`lib/main.dart` reaches the camera, TFLite, ML Kit and `dart:io`
+through face enrollment and registration. None of that compiles for the
+web, and a runtime flag doesn't help — the compiler follows the import
+regardless. So each target gets a root that only reaches what it can
+actually build.
+
+The student web app is **view-only by design**: attendance, timetable,
+notifications, read-only profile. It cannot enroll a face, because a
+browser has no on-device model. iPhone students register once at the
+office on a department Android device; after that they use the web app.
+There is no iOS build because publishing one needs a paid Apple
+developer account.
 
 Installed apps check Firestore at login and prompt users to update
 when a newer APK is published.
 
-## 0. Admin console on the web
+## 0. Web apps
 
-The console is built and published automatically by
-`.github/workflows/deploy-admin-web.yml` on every push to `main`.
+Both web front-ends are built and published automatically by
+`.github/workflows/deploy-admin-web.yml` on every push to `main` that
+touches `lib/`, `web/`, `docs/` or `pubspec.yaml`.
 
 **One-time setup** — on GitHub: **Settings → Pages → Build and
 deployment → Source: GitHub Actions**. (This replaces the older
@@ -91,7 +108,7 @@ fixed admin account only.
    are only worth publishing if you actually have old or emulated
    devices to support:
    ```
-   copy build\app\outputs\flutter-apk\app-arm64-v8a-release.apk docs\attendx-v1.2.3.apk
+   copy build\app\outputs\flutter-apk\app-arm64-v8a-release.apk docs\attendx-v1.2.5.apk
    ```
    Check the size before committing. If it's over ~60 MB, you built a
    fat APK by mistake — rebuild with the flag.
@@ -115,9 +132,9 @@ Create/update the Firestore document **`app_meta/android`**:
 
 | Field               | Type    | Example                                              |
 |---------------------|---------|------------------------------------------------------|
-| `latestVersionCode` | number  | `3`  (must be > the code users currently have)       |
-| `latestVersion`     | string  | `"1.2.0"`                                            |
-| `apkUrl`            | string  | `"https://ganga2006.github.io/attendx/attendx-v1.2.3.apk"` |
+| `latestVersionCode` | number  | `8`  (must be > the code users currently have)       |
+| `latestVersion`     | string  | `"1.2.5"`                                            |
+| `apkUrl`            | string  | `"https://ganga2006.github.io/attendx/attendx-v1.2.5.apk"` |
 | `forceUpdate`       | boolean | `false` (set `true` to block old versions entirely)  |
 | `notes`             | string  | `"CR batch labs + daily digest notifications"`       |
 
@@ -126,7 +143,7 @@ dialog with an **Update Now** button that downloads the new APK from
 your site. With `forceUpdate: true` the dialog cannot be dismissed.
 
 > **`apkUrl` must include the version in the filename.** The APKs in
-> `docs/` are named `attendx-v1.2.3.apk`, not `attendx.apk` — the app
+> `docs/` are named `attendx-v1.2.5.apk`, not `attendx.apk` — the app
 > opens this string verbatim, so a filename that doesn't exist gives
 > everyone a 404 on the Update button.
 >

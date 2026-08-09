@@ -1,16 +1,18 @@
-name: Deploy admin console
+name: Deploy web apps
 
-# Builds the AttendX admin console for the web and publishes it to GitHub
-# Pages, alongside the existing APK download page.
+# Builds both web front-ends and publishes them to GitHub Pages
+# alongside the APK download page.
 #
 # The site ends up as:
-#   https://ganga2006.github.io/attendx/         -> APK download page (docs/)
-#   https://ganga2006.github.io/attendx/admin/   -> admin console (this build)
+#   https://ganga2006.github.io/attendx/         -> download page (docs/)
+#   https://ganga2006.github.io/attendx/admin/   -> staff console
+#   https://ganga2006.github.io/attendx/app/     -> student web app (iPhone)
 #
-# Only the admin entry point is built. `lib/main.dart` pulls in TFLite,
-# ML Kit, the camera and `dart:io` for face enrollment, none of which
-# compile for the web — `lib/main_web.dart` reaches only the admin
-# screens, which are plain Flutter + Firestore.
+# `lib/main.dart` is never built here. It pulls in TFLite, ML Kit, the
+# camera and `dart:io` for face enrollment, none of which compile for
+# the web. The two web entry points reach only screens that are plain
+# Flutter + Firestore, which is what makes a browser build possible
+# without forking the app.
 
 on:
   push:
@@ -67,15 +69,35 @@ jobs:
             --release \
             -t lib/main_web.dart \
             --base-href /attendx/admin/
+          mv build/web build/admin-web
+
+      - name: Build student web app
+        # The iPhone answer. Same repo, different entry point: the mobile
+        # root reaches the camera, TFLite and dart:io through
+        # registration, none of which compile for the web.
+        run: |
+          flutter build web \
+            --release \
+            -t lib/main_student_web.dart \
+            --base-href /attendx/app/
+
+          # Both builds share web/index.html, which is titled for the
+          # console. Retitle the student copy — the title is what iOS
+          # uses as the Home Screen label when a student adds it.
+          sed -i 's/AttendX Admin/AttendX/g' build/web/index.html
+          sed -i 's/AttendX Admin/AttendX/g' build/web/manifest.json
+
+          mv build/web build/student-web
 
       - name: Assemble the site
         run: |
           mkdir -p _site
-          # The APK download page stays at the root.
+          # The download page stays at the root.
           cp -r docs/. _site/
-          # The console goes in its own folder underneath it.
-          mkdir -p _site/admin
-          cp -r build/web/. _site/admin/
+          # Console and student app each get their own folder underneath.
+          mkdir -p _site/admin _site/app
+          cp -r build/admin-web/. _site/admin/
+          cp -r build/student-web/. _site/app/
           # Pages runs Jekyll by default, which strips files and folders
           # beginning with an underscore — Flutter emits some.
           touch _site/.nojekyll
