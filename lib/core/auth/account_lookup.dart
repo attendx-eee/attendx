@@ -52,12 +52,29 @@ class Account {
 class AccountLookup {
   AccountLookup._();
 
-  static const String admins = 'admins';
+  /// Singular, matching the collection created in the console. Firestore
+  /// won't rename a collection, and one document isn't worth a migration
+  /// to gain a plural.
+  static const String admins = 'admin';
   static const String facultyAccounts = 'faculty_accounts';
   static const String students = 'students';
 
+  /// Face templates, split the same way the accounts are.
+  ///
+  /// A faculty template and a student template are used for different
+  /// things — one identifies a lecturer unlocking the app, the other is
+  /// swept for in a roomful of students — and keeping them apart means
+  /// the classroom gallery isn't carrying staff faces it will never
+  /// match, on every scan, for every period.
+  static const String studentFaces = 'student_face_enrollments';
+  static const String facultyFaces = 'faculty_face_enrollments';
+
   /// Kept only so accounts created before the split still sign in.
   static const String legacyUsers = 'users';
+
+  /// Where [kind]'s face template belongs.
+  static String facesFor(AccountKind kind) =>
+      kind == AccountKind.faculty ? facultyFaces : studentFaces;
 
   static final FirebaseFirestore _db = FirebaseFirestore.instance;
 

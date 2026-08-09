@@ -118,8 +118,12 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
       roster[doc.id] = data;
     }
 
+    // Students only, deliberately. Faculty templates live in their own
+    // collection and would be dead weight in a classroom gallery — the
+    // lecturer's own face is never one of the answers, and every extra
+    // template is another comparison on every frame.
     final enrollSnap =
-        await db.collection('student_face_enrollments').get();
+        await db.collection(AccountLookup.studentFaces).get();
 
     final enrollments = <String, Map<String, dynamic>>{
       for (final doc in enrollSnap.docs)

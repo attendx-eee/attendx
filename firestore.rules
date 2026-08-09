@@ -16,26 +16,24 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == uid;
     }
 
-    // Role usually lives on the caller's own student doc ("hod"/"office" =
-    // admin). Some admin/office accounts (e.g. the fixed admin@attendx.app
-    // login) only ever get a `users/{uid}` doc created for them and have
-    // NO matching `students/{uid}` doc — get() on a missing doc throws in
-    // rules, which silently denies every admin write for that account. So
-    // check `students` first and fall back to `users`.
+    // Each role has its own collection, checked in order of authority:
+    // `admin`, then `faculty_accounts`, then `students`, then the
+    // pre-split `users`. `students` is near-last on purpose — it's where
+    // the old scheme piled everything and is the least trustworthy
+    // signal of what an account actually is.
     //
-    // Compared case-insensitively: the app's own role checks (RoleRouter,
-    // dashboard) lowercase the value before comparing, so a doc with
-    // "Hod"/"HOD"/"Office" etc. still routes the user into admin screens
-    // client-side — but a case-sensitive rule here would then reject
-    // every single admin write with permission-denied. Matching the
-    // client's leniency avoids that trap.
-    // Admins and faculty have their own collections. `students` is
-    // checked last and only as a fallback, because it's where the old
-    // scheme piled everything and is the least trustworthy signal of
-    // what an account actually is.
+    // Every step is guarded by exists(): get() on a missing document
+    // throws in rules, and a throw here silently denies every write the
+    // caller attempts, which reads like a rules bug rather than a
+    // missing record.
+    //
+    // Compared case-insensitively by the callers below, because the
+    // app's own checks lowercase before comparing. A doc holding "HOD"
+    // routes into the admin screens client-side, and a case-sensitive
+    // rule would then reject every write it made.
     function myRole() {
-      return exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-        ? get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.get('role', 'hod')
+      return exists(/databases/$(database)/documents/admin/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/admin/$(request.auth.uid)).data.get('role', 'hod')
         : (exists(/databases/$(database)/documents/faculty_accounts/$(request.auth.uid))
             ? 'faculty'
             : (exists(/databases/$(database)/documents/students/$(request.auth.uid))
@@ -110,7 +108,7 @@ service cloud.firestore {
     // is created in the Firebase console, deliberately, by someone with
     // project access. A self-service path to `role: hod` would be the
     // single worst hole in this ruleset.
-    match /admins/{uid} {
+    match /admin/{uid} {
       allow read: if signedIn();
       allow write: if false;
     }
@@ -175,6 +173,17 @@ service cloud.firestore {
     // Readable by signed-in clients (face verification); written by the
     // owner (enrollment + adaptive learning) or admins.
     match /student_face_enrollments/{uid} {
+      allow read: if signedIn();
+      allow write: if isSelf(uid) || isAdmin();
+    }
+
+    // ---------- faculty face templates ----------
+    // Same shape as the student templates, in their own collection so
+    // the classroom gallery isn't carrying staff faces it will never
+    // match. Readable by any signed-in user for the same reason the
+    // student one is: the duplicate check at enrollment has to compare
+    // a new face against every face already on file, staff included.
+    match /faculty_face_enrollments/{uid} {
       allow read: if signedIn();
       allow write: if isSelf(uid) || isAdmin();
     }

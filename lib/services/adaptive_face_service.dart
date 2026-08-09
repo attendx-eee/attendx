@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'firestore_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
@@ -372,8 +373,13 @@ class AdaptiveFaceService {
     try {
       if (result.uid != uid || result.bestPose.isEmpty) return false;
 
+      // Whichever collection this account's template lives in. Writing
+      // an adapted template into the student collection for a faculty
+      // account would create a second, divergent copy that nothing
+      // reads — the login would keep working and the learning would
+      // quietly go nowhere.
       final docRef =
-          _firestore.collection('student_face_enrollments').doc(uid);
+          (await FirestoreService().facesRef(uid)).doc(uid);
       final snapshot = await docRef.get();
       if (!snapshot.exists) return false;
 

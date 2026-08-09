@@ -36,11 +36,21 @@ class FirestoreService {
         .set(data, SetOptions(merge: true));
   }
 
+  /// Which face-template collection holds [uid].
+  ///
+  /// Faculty templates live apart from student ones. Resolved from the
+  /// account rather than passed in, because every caller would otherwise
+  /// have to know the answer and one of them would eventually get it
+  /// wrong — silently, by writing a template nobody later reads.
+  Future<CollectionReference<Map<String, dynamic>>> facesRef(
+      String uid) async {
+    final account = await AccountLookup.find(uid);
+    return _firestore.collection(AccountLookup.facesFor(account.kind));
+  }
+
   Future<void> saveStageEmbeddings(String uid, Map<String, dynamic> data) async {
-    await _firestore
-        .collection("student_face_enrollments")
-        .doc(uid)
-        .set(data, SetOptions(merge: true));
+    final faces = await facesRef(uid);
+    await faces.doc(uid).set(data, SetOptions(merge: true));
   }
 
   Future<DocumentSnapshot<Map<String, dynamic>>> getStudent(String uid) async {
@@ -50,17 +60,38 @@ class FirestoreService {
         .get();
   }
 
-  Future<DocumentSnapshot<Map<String, dynamic>>> getStageEmbeddings(String uid) async {
-    return await _firestore
-        .collection("student_face_enrollments")
-        .doc(uid)
-        .get();
+  /// One account's template, from wherever it lives.
+  ///
+  /// Falls back to the other collection if the expected one is empty:
+  /// an account whose record moved between collections after enrolling
+  /// would otherwise look like it had never enrolled at all.
+  Future<DocumentSnapshot<Map<String, dynamic>>> getStageEmbeddings(
+      String uid) async {
+    final faces = await facesRef(uid);
+    final doc = await faces.doc(uid).get();
+    if (doc.exists) return doc;
+
+    final other = faces.id == AccountLookup.facultyFaces
+        ? AccountLookup.studentFaces
+        : AccountLookup.facultyFaces;
+
+    return _firestore.collection(other).doc(uid).get();
   }
 
-  Future<QuerySnapshot<Map<String, dynamic>>> getAllFaceEnrollments() async {
-    return await _firestore
-        .collection("student_face_enrollments")
-        .get();
+  /// Every enrolled face, students and staff together.
+  ///
+  /// The duplicate check has to span both collections. Splitting them
+  /// and then only reading one would mean a lecturer could enroll a
+  /// face already registered to a student, which is precisely the case
+  /// the check exists for.
+  Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+      getAllFaceEnrollmentDocs() async {
+    final results = await Future.wait([
+      _firestore.collection(AccountLookup.studentFaces).get(),
+      _firestore.collection(AccountLookup.facultyFaces).get(),
+    ]);
+
+    return [for (final snap in results) ...snap.docs];
   }
 
   /// First-time registration only: writes the student profile AND the face
@@ -141,8 +172,15 @@ class FirestoreService {
       SetOptions(merge: true),
     );
 
-    final enrollmentRef =
-        _firestore.collection('student_face_enrollments').doc(uid);
+    // The template follows the profile. `collection` already says which
+    // kind of account this is, so there's no lookup to get wrong — and
+    // no lookup to fail, which matters because at this point the
+    // profile document doesn't exist yet.
+    final enrollmentRef = _firestore
+        .collection(collection == AccountLookup.facultyAccounts
+            ? AccountLookup.facultyFaces
+            : AccountLookup.studentFaces)
+        .doc(uid);
     batch.set(enrollmentRef, {
       'uid': uid,
       'name': profile['name'] ?? '',
@@ -186,8 +224,19 @@ class FirestoreService {
     await _deleteWhere(collection: 'attendance_manual', field: 'uid', uid: uid);
 
     final batch = _firestore.batch();
-    batch.delete(_firestore.collection('student_face_enrollments').doc(uid));
-    batch.delete(_firestore.collection('students').doc(uid));
+
+    // Both template collections unconditionally. Deleting a document
+    // that isn't there is free, and working out which one it's in would
+    // mean trusting a profile lookup during the one operation whose
+    // whole job is to remove that profile.
+    batch.delete(
+        _firestore.collection(AccountLookup.studentFaces).doc(uid));
+    batch.delete(
+        _firestore.collection(AccountLookup.facultyFaces).doc(uid));
+
+    final profile = await profileRef(uid);
+    if (profile != null) batch.delete(profile);
+
     await batch.commit();
   }
 
@@ -284,10 +333,9 @@ class FirestoreService {
 
     // Store biometric data separately (v2 adaptive schema).
     // A fresh enrollment resets adaptation history and aging flags.
-    await _firestore
-        .collection('student_face_enrollments')
-        .doc(uid)
-        .set({
+    final faces = await facesRef(uid);
+
+    await faces.doc(uid).set({
       'uid': uid,
       'name': name,
       'regNo': regNo,

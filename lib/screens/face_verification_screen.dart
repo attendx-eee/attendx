@@ -73,10 +73,12 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
       await faceEmbeddingService.initialize();
 
       if (widget.verifyAcrossUsers) {
-        final snapshot = await firestoreService.getAllFaceEnrollments();
+        // Both collections: "who is this face" has to be able to answer
+        // "a lecturer" as readily as "a student".
+        final docs = await firestoreService.getAllFaceEnrollmentDocs();
         if (!mounted) return;
 
-        _candidateProfiles = snapshot.docs
+        _candidateProfiles = docs
             .where((doc) => doc.data()['embeddings'] is Map)
             .map((doc) => FaceCandidate.fromDoc(doc.id, doc.data()))
             .toList();

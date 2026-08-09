@@ -892,8 +892,12 @@ Future<void> _uploadEmbeddingsToFirebase() async {
     // file (not a single blended vector against single poses — that
     // mismatch was under-scoring real duplicates and letting them
     // through). See AdaptiveFaceService.findDuplicate doc comment.
-    final allEnrollments = await firestoreService.getAllFaceEnrollments();
-    final otherCandidates = allEnrollments.docs
+    // Both collections. Faculty templates were split out of the student
+    // one; reading only students would let a lecturer enroll a face
+    // already registered to a student, which is exactly the case this
+    // check exists for.
+    final allEnrollments = await firestoreService.getAllFaceEnrollmentDocs();
+    final otherCandidates = allEnrollments
         .where((doc) => doc.id != user.uid)
         .map((doc) => FaceCandidate.fromDoc(doc.id, doc.data()))
         .toList();
