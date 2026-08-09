@@ -9,6 +9,7 @@ import '../../attendance/models/attendance_marker.dart';
 import '../../attendance/screens/student_attendance_screen.dart';
 import '../../attendance/services/manual_attendance_service.dart';
 import '../../core/constants/app_config.dart';
+import '../../core/auth/account_lookup.dart';
 import '../../core/responsive/responsive.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_radius.dart';
@@ -152,6 +153,10 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
 
       final students = snapshot.docs.where((doc) {
         final data = doc.data();
+        // Staff records that predate the collection split still sit in
+        // `students`. Counting them would drag every percentage down
+        // with people who were never in the class.
+        if (!AccountLookup.isStudentDoc(data)) return false;
         return AppConfig.departmentOf(data) == AppConfig.department &&
             AppConfig.yearOf(data) == _year;
       }).toList();

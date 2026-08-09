@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/auth/account_lookup.dart';
 import '../../core/constants/app_config.dart';
 import '../../core/responsive/responsive.dart';
 import '../../core/theme/app_colors.dart';
@@ -48,7 +49,7 @@ class _FacultySettingsScreenState extends State<FacultySettingsScreen> {
     final enabled = await BiometricAuthService.instance.isEnabled();
 
     final me = await FirebaseFirestore.instance
-        .collection('students')
+        .collection(AccountLookup.facultyAccounts)
         .doc(widget.account.uid)
         .get();
 
@@ -252,7 +253,7 @@ class _FacultySettingsScreenState extends State<FacultySettingsScreen> {
       // those are the admin's to set, and the security rules refuse a
       // self-update that changes them anyway.
       await FirebaseFirestore.instance
-          .collection('students')
+          .collection(AccountLookup.facultyAccounts)
           .doc(widget.account.uid)
           .update({
         'name': name.text.trim(),

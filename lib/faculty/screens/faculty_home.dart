@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../../admin/models/period_model.dart';
 import '../../admin/services/timetable_service.dart';
 import '../../admin/widgets/master_tile.dart';
+import '../../core/auth/account_lookup.dart';
 import '../../core/constants/app_config.dart';
 import '../../core/responsive/responsive.dart';
 import '../../core/theme/app_colors.dart';
@@ -154,7 +155,7 @@ class _FacultyHomeState extends State<FacultyHome> {
       // Re-read alongside the timetable, so one refresh picks up both a
       // face enrolled moments ago and an approval granted since open.
       final me = await FirebaseFirestore.instance
-          .collection('students')
+          .collection(AccountLookup.facultyAccounts)
           .doc(widget.account.uid)
           .get();
 

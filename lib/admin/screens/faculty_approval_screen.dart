@@ -9,6 +9,7 @@ import '../../faculty/models/faculty_account.dart';
 import '../../notifications/services/notification_service.dart';
 import '../models/faculty_model.dart';
 import '../services/master_data_service.dart';
+import '../../core/auth/account_lookup.dart';
 
 /// Admin-only: approve staff who have signed up, and say who they are on
 /// the timetable.
@@ -22,8 +23,9 @@ class FacultyApprovalScreen extends StatelessWidget {
   const FacultyApprovalScreen({super.key});
 
   Stream<List<FacultyAccount>> get _pending => FirebaseFirestore.instance
-      .collection('students')
-      .where('role', isEqualTo: 'faculty')
+      // No role filter: the collection holds nothing but faculty, which
+      // is rather the point of having moved them out of `students`.
+      .collection(AccountLookup.facultyAccounts)
       .snapshots()
       .map((snap) {
         final list = snap.docs
@@ -178,7 +180,7 @@ class _RequestCardState extends State<_RequestCard> {
       // facultyId would both see the same classes and could overwrite
       // each other's attendance.
       final clash = await FirebaseFirestore.instance
-          .collection('students')
+          .collection(AccountLookup.facultyAccounts)
           .where('facultyId', isEqualTo: _facultyId)
           .limit(1)
           .get();
@@ -200,7 +202,7 @@ class _RequestCardState extends State<_RequestCard> {
       // Any corrections the admin made are saved with the approval, so
       // the record that goes live is the corrected one.
       await FirebaseFirestore.instance
-          .collection('students')
+          .collection(AccountLookup.facultyAccounts)
           .doc(widget.account.uid)
           .update({
         'facultyStatus': FacultyAccount.approved,
@@ -290,7 +292,7 @@ class _RequestCardState extends State<_RequestCard> {
 
     try {
       await FirebaseFirestore.instance
-          .collection('students')
+          .collection(AccountLookup.facultyAccounts)
           .doc(widget.account.uid)
           .update({
         'facultyStatus': FacultyAccount.rejected,

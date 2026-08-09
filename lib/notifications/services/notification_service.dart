@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../core/constants/app_config.dart';
+import '../../core/auth/account_lookup.dart';
 import '../models/notification_model.dart';
 
 class NotificationService {
@@ -153,6 +154,7 @@ class NotificationService {
 
     final targets = students.docs.where((doc) {
       final data = doc.data();
+      if (!AccountLookup.isStudentDoc(data)) return false;
       return AppConfig.departmentOf(data) == targetDept &&
           AppConfig.yearOf(data) == year;
     }).toList();

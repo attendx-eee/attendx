@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../admin/models/period_model.dart';
 import '../admin/services/timetable_service.dart';
 import '../core/constants/app_config.dart';
+import '../core/auth/account_lookup.dart';
 import '../core/responsive/responsive.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_radius.dart';
@@ -118,6 +119,7 @@ class _CrLabAttendanceScreenState extends State<CrLabAttendanceScreen> {
       final roster = <String, Map<String, dynamic>>{};
       for (final doc in snap.docs) {
         final data = doc.data();
+        if (!AccountLookup.isStudentDoc(data)) continue;
         if (AppConfig.departmentOf(data) != _department) continue;
         if (AppConfig.yearOf(data) != _year) continue;
 

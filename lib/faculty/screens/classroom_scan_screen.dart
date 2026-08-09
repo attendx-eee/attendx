@@ -9,6 +9,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 import '../../admin/models/period_model.dart';
 import '../../core/constants/app_config.dart';
+import '../../core/auth/account_lookup.dart';
 import '../../core/theme/app_colors.dart';
 import '../../models/face_enrollment_imports.dart';
 import '../services/classroom_recognition_service.dart';
@@ -105,6 +106,7 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
     final roster = <String, Map<String, dynamic>>{};
     for (final doc in studentSnap.docs) {
       final data = doc.data();
+      if (!AccountLookup.isStudentDoc(data)) continue;
       if (AppConfig.departmentOf(data) != AppConfig.department) continue;
       if (AppConfig.yearOf(data) != widget.year) continue;
       // A lab period belongs to one batch; the rest of the year isn't

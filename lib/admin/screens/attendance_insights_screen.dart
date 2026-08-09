@@ -7,6 +7,7 @@ import 'package:printing/printing.dart';
 
 import '../../attendance/services/manual_attendance_service.dart';
 import '../../core/constants/app_config.dart';
+import '../../core/auth/account_lookup.dart';
 import '../../services/attendance_service.dart';
 
 /// Admin-only attendance insights fed by Raspberry Pi check-in events:
@@ -90,7 +91,8 @@ class _AttendanceInsightsScreenState extends State<AttendanceInsightsScreen> {
 
       final students = {
         for (final doc in studentsSnap.docs)
-          if (AppConfig.departmentOf(doc.data()) == AppConfig.department)
+          if (AccountLookup.isStudentDoc(doc.data()) &&
+              AppConfig.departmentOf(doc.data()) == AppConfig.department)
             doc.id: doc.data(),
       };
       _totalStudents = students.length;

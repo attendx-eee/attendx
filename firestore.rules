@@ -29,12 +29,20 @@ service cloud.firestore {
     // client-side — but a case-sensitive rule here would then reject
     // every single admin write with permission-denied. Matching the
     // client's leniency avoids that trap.
+    // Admins and faculty have their own collections. `students` is
+    // checked last and only as a fallback, because it's where the old
+    // scheme piled everything and is the least trustworthy signal of
+    // what an account actually is.
     function myRole() {
-      return exists(/databases/$(database)/documents/students/$(request.auth.uid))
-        ? get(/databases/$(database)/documents/students/$(request.auth.uid)).data.role
-        : (exists(/databases/$(database)/documents/users/$(request.auth.uid))
-            ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
-            : null);
+      return exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.get('role', 'hod')
+        : (exists(/databases/$(database)/documents/faculty_accounts/$(request.auth.uid))
+            ? 'faculty'
+            : (exists(/databases/$(database)/documents/students/$(request.auth.uid))
+                ? get(/databases/$(database)/documents/students/$(request.auth.uid)).data.role
+                : (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+                    ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+                    : null)));
     }
 
     function isAdmin() {
@@ -87,8 +95,47 @@ service cloud.firestore {
     // period_attendance directly.
     function isApprovedFaculty() {
       return isFaculty()
-        && exists(/databases/$(database)/documents/students/$(request.auth.uid))
-        && get(/databases/$(database)/documents/students/$(request.auth.uid)).data.facultyStatus == 'approved';
+        && (
+          (exists(/databases/$(database)/documents/faculty_accounts/$(request.auth.uid))
+            && get(/databases/$(database)/documents/faculty_accounts/$(request.auth.uid)).data.get('facultyStatus', 'pending') == 'approved')
+          // Accounts not yet migrated out of `students`.
+          || (exists(/databases/$(database)/documents/students/$(request.auth.uid))
+            && get(/databases/$(database)/documents/students/$(request.auth.uid)).data.get('facultyStatus', 'pending') == 'approved')
+        );
+    }
+
+    // ---------- admins ----------
+    // Readable by any signed-in user, because the role check above has
+    // to be able to see it. Not writable from the app at all: an admin
+    // is created in the Firebase console, deliberately, by someone with
+    // project access. A self-service path to `role: hod` would be the
+    // single worst hole in this ruleset.
+    match /admins/{uid} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    // ---------- faculty accounts ----------
+    // A faculty member creates their own record at sign-up and may edit
+    // their own details. `facultyStatus` and `facultyId` are admin-only
+    // on both create and update — otherwise approving yourself would be
+    // a matter of picking the right value at sign-up.
+    match /faculty_accounts/{uid} {
+      allow read: if signedIn();
+
+      allow create: if isAdmin()
+        || (isSelf(uid)
+            && request.resource.data.get('facultyStatus', 'pending') == 'pending'
+            && request.resource.data.get('facultyId', '') == '');
+
+      allow update: if isAdmin()
+        || (isSelf(uid)
+            && request.resource.data.get('facultyStatus', 'pending')
+                 == resource.data.get('facultyStatus', 'pending')
+            && request.resource.data.get('facultyId', '')
+                 == resource.data.get('facultyId', ''));
+
+      allow delete: if isAdmin();
     }
 
     // ---------- students ----------

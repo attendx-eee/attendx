@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -6,6 +5,7 @@ import 'package:flutter/material.dart';
 // now, so nothing in the phone build should be able to reach the
 // console — and not importing it keeps the whole admin tree out of the
 // student APK rather than merely hiding the button.
+import '../core/auth/account_lookup.dart';
 import '../faculty/models/faculty_account.dart';
 import '../faculty/screens/faculty_home.dart';
 import '../services/firestore_service.dart';
@@ -35,6 +35,13 @@ class RoleRouter extends StatelessWidget {
   Future<String> _resolveRole() async {
     final uid = overrideUid ?? FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return 'student';
+
+    // Admins and faculty live in their own collections now, so a
+    // missing `students` doc no longer means "incomplete registration"
+    // on its own — it's the normal state for both of them.
+    final account = await AccountLookup.find(uid);
+    if (account.isAdmin) return account.role;
+    if (account.isFaculty) return 'faculty';
 
     final doc = await FirestoreService().getStudent(uid);
     if (!doc.exists) {
@@ -155,8 +162,11 @@ class _FacultyGate extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      future: FirestoreService().getStudent(uid),
+    // Goes through AccountLookup rather than straight to a collection,
+    // so a faculty member whose record hasn't been migrated out of
+    // `students` yet still reaches their dashboard.
+    return FutureBuilder<Account>(
+      future: AccountLookup.find(uid),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return const Scaffold(
@@ -164,15 +174,15 @@ class _FacultyGate extends StatelessWidget {
           );
         }
 
-        final data = snapshot.data!.data();
-        if (data == null) {
+        final account = snapshot.data!;
+        if (!account.exists) {
           return const Scaffold(
             body: Center(child: Text('Staff record not found.')),
           );
         }
 
         return FacultyHome(
-          account: FacultyAccount.fromMap(uid, data),
+          account: FacultyAccount.fromMap(uid, account.data),
           onLogout: signOutToLogin,
         );
       },

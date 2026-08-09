@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../attendance/models/attendance_marker.dart';
 import '../../attendance/screens/student_directory_screen.dart';
 import '../../attendance/services/attendance_permission_service.dart';
+import '../../core/auth/account_lookup.dart';
 import '../../core/constants/app_config.dart';
 import '../../core/responsive/responsive.dart';
 import '../../core/theme/app_colors.dart';
@@ -48,19 +49,18 @@ class MasterHome extends StatelessWidget {
   /// the quick-stat cards and the red badges on the Approvals tiles, so
   /// nothing waiting on the admin ever goes unnoticed.
   Stream<int> _pendingCount(String field) => FirebaseFirestore.instance
-      .collection('students')
+      .collection(AccountLookup.students)
       .where(field, isEqualTo: 'pending')
       .snapshots()
       .map((snap) => snap.docs.length);
 
   /// Staff who have signed up but aren't approved yet.
   ///
-  /// Filtered client-side rather than with a second `where`: a compound
-  /// query on role plus facultyStatus needs a composite index, and this
-  /// list is a handful of documents.
+  /// Filtered client-side rather than with a `where`: faculty_accounts
+  /// holds only faculty, so the whole collection is the candidate set
+  /// and it's a handful of documents.
   Stream<int> _pendingFacultyCount() => FirebaseFirestore.instance
-      .collection('students')
-      .where('role', isEqualTo: 'faculty')
+      .collection(AccountLookup.facultyAccounts)
       .snapshots()
       .map((snap) => snap.docs
           .where((d) => (d.data()['facultyStatus'] ?? 'pending') == 'pending')

@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/auth/account_lookup.dart';
 import '../../core/constants/app_config.dart';
 import '../../core/responsive/responsive.dart';
 import '../../core/theme/app_colors.dart';
@@ -209,9 +210,18 @@ class _StudentDirectoryScreenState extends State<StudentDirectoryScreen> {
 
                 final all = snapshot.data?.docs ?? [];
 
+                // Staff whose records still sit in `students` from
+                // before the collection split. An admin account has no
+                // year, so AppConfig.yearOf falls back to 1 and it
+                // surfaces at the top of Year 1 as "Unknown".
+                final strays = all
+                    .where((d) => !AccountLookup.isStudentDoc(d.data()))
+                    .toList();
+
                 final students = all.where((doc) {
                   final data = doc.data();
-                  return AppConfig.departmentOf(data) ==
+                  return AccountLookup.isStudentDoc(data) &&
+                      AppConfig.departmentOf(data) ==
                           AppConfig.department &&
                       AppConfig.yearOf(data) == _selectedYear &&
                       _matchesQuery(data);
@@ -222,7 +232,16 @@ class _StudentDirectoryScreenState extends State<StudentDirectoryScreen> {
                       .compareTo(
                           (b.data()['name'] ?? '').toString().toLowerCase()));
 
-                if (students.isEmpty) return _buildEmpty();
+                if (students.isEmpty) {
+                  return ListView(
+                    padding: Responsive.all(18),
+                    children: [
+                      if (strays.isNotEmpty && widget.marker.isAdmin)
+                        _buildStrayNotice(strays),
+                      _buildEmpty(),
+                    ],
+                  );
+                }
 
                 return ListView.separated(
                   padding: EdgeInsets.fromLTRB(
@@ -236,14 +255,24 @@ class _StudentDirectoryScreenState extends State<StudentDirectoryScreen> {
                       SizedBox(height: Responsive.h(10)),
                   itemBuilder: (context, index) {
                     if (index == 0) {
-                      return Padding(
-                        padding: EdgeInsets.only(bottom: Responsive.h(4)),
-                        child: Text(
-                          "${students.length} student"
-                          "${students.length == 1 ? '' : 's'} in Year "
-                          "$_selectedYear",
-                          style: AppTextStyles.caption,
-                        ),
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (strays.isNotEmpty && widget.marker.isAdmin) ...[
+                            _buildStrayNotice(strays),
+                            SizedBox(height: Responsive.h(12)),
+                          ],
+                          Padding(
+                            padding:
+                                EdgeInsets.only(bottom: Responsive.h(4)),
+                            child: Text(
+                              "${students.length} student"
+                              "${students.length == 1 ? '' : 's'} in Year "
+                              "$_selectedYear",
+                              style: AppTextStyles.caption,
+                            ),
+                          ),
+                        ],
                       );
                     }
 
@@ -272,6 +301,128 @@ class _StudentDirectoryScreenState extends State<StudentDirectoryScreen> {
         ),
       ),
     );
+  }
+
+  /// Banner listing staff records still sitting in `students`.
+  ///
+  /// They're already hidden from the list, so nothing is broken — but
+  /// leaving them there silently means the next person to look at the
+  /// database finds an admin filed as a first-year and has no idea why.
+  Widget _buildStrayNotice(
+      List<QueryDocumentSnapshot<Map<String, dynamic>>> strays) {
+    return Container(
+      padding: Responsive.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: .10),
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: AppColors.warning.withValues(alpha: .35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.moving_rounded,
+                  size: Responsive.sp(18), color: AppColors.warning),
+              SizedBox(width: Responsive.w(8)),
+              Expanded(
+                child: Text(
+                  '${strays.length} staff record'
+                  '${strays.length == 1 ? '' : 's'} still in "students"',
+                  style: AppTextStyles.title
+                      .copyWith(fontSize: Responsive.sp(13)),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: Responsive.h(6)),
+          Text(
+            'Admins belong in "admins" and faculty in "faculty_accounts". '
+            'These are hidden from the list and excluded from every '
+            'count, but they should be moved.',
+            style: AppTextStyles.caption,
+          ),
+          SizedBox(height: Responsive.h(10)),
+          ...strays.map((doc) {
+            final data = doc.data();
+            final role = (data['role'] ?? '?').toString();
+            final target = AccountLookup.isAdminRole(role.toLowerCase())
+                ? AccountLookup.admins
+                : AccountLookup.facultyAccounts;
+
+            return Padding(
+              padding: EdgeInsets.only(bottom: Responsive.h(8)),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          data['name']?.toString().isNotEmpty == true
+                              ? '${data['name']} • $role'
+                              : role,
+                          style: AppTextStyles.caption
+                              .copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        SelectableText(
+                          'Move to  $target/${doc.id}',
+                          style: AppTextStyles.caption.copyWith(
+                            fontFamily: 'monospace',
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => _migrateStray(doc.id, data, target),
+                    child: const Text('Move'),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  /// Copies a staff record into its proper collection, then removes it
+  /// from `students`.
+  ///
+  /// Copy-then-delete, not a move: if the delete fails the account still
+  /// works from its new home, whereas a failed copy after a delete would
+  /// lock somebody out of the console.
+  Future<void> _migrateStray(
+    String uid,
+    Map<String, dynamic> data,
+    String target,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final db = FirebaseFirestore.instance;
+
+    try {
+      await db.collection(target).doc(uid).set(data, SetOptions(merge: true));
+      await db.collection(AccountLookup.students).doc(uid).delete();
+
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Moved to $target. Sign out and back in to pick up '
+              'the new record.'),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text("Couldn't move it: $e"),
+          backgroundColor: AppColors.danger,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   Widget _buildYearStrip(List<int> years) {
