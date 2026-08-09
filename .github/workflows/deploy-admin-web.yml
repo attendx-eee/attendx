@@ -4,9 +4,9 @@ name: Deploy web apps
 # alongside the APK download page.
 #
 # The site ends up as:
-#   https://ganga2006.github.io/attendx/         -> download page (docs/)
-#   https://ganga2006.github.io/attendx/admin/   -> staff console
-#   https://ganga2006.github.io/attendx/app/     -> student web app (iPhone)
+#   https://attendx-eee.github.io/attendx/         -> download page (docs/)
+#   https://attendx-eee.github.io/attendx/admin/   -> staff console
+#   https://attendx-eee.github.io/attendx/app/     -> student web app (iPhone)
 #
 # `lib/main.dart` is never built here. It pulls in TFLite, ML Kit, the
 # camera and `dart:io` for face enrollment, none of which compile for

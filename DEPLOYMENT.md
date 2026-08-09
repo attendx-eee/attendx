@@ -4,9 +4,9 @@ Three things ship from the same free GitHub Pages site:
 
 | URL | What it is |
 |-----|------------|
-| `https://ganga2006.github.io/attendx/` | Download page (`docs/`) — detects iOS vs Android |
-| `https://ganga2006.github.io/attendx/admin/` | Staff console (`lib/main_web.dart`) |
-| `https://ganga2006.github.io/attendx/app/` | Student web app (`lib/main_student_web.dart`) |
+| `https://attendx-eee.github.io/attendx/` | Download page (`docs/`) — detects iOS vs Android |
+| `https://attendx-eee.github.io/attendx/admin/` | Staff console (`lib/main_web.dart`) |
+| `https://attendx-eee.github.io/attendx/app/` | Student web app (`lib/main_student_web.dart`) |
 
 ### Why there are three entry points
 
@@ -38,7 +38,7 @@ deployment → Source: GitHub Actions**. (This replaces the older
 `docs/` itself, so the download page stays exactly where it was.)
 
 Then, in the Firebase console: **Authentication → Settings → Authorized
-domains → Add domain → `ganga2006.github.io`**. Without this, sign-in on
+domains → Add domain → `attendx-eee.github.io`**. Without this, sign-in on
 the console fails with `auth/unauthorized-domain`.
 
 After that, every push to `main` that touches `lib/`, `web/`, `docs/` or
@@ -134,7 +134,7 @@ Create/update the Firestore document **`app_meta/android`**:
 |---------------------|---------|------------------------------------------------------|
 | `latestVersionCode` | number  | `8`  (must be > the code users currently have)       |
 | `latestVersion`     | string  | `"1.2.5"`                                            |
-| `apkUrl`            | string  | `"https://ganga2006.github.io/attendx/attendx-v1.2.5.apk"` |
+| `apkUrl`            | string  | `"https://attendx-eee.github.io/attendx/attendx-v1.2.5.apk"` |
 | `forceUpdate`       | boolean | `false` (set `true` to block old versions entirely)  |
 | `notes`             | string  | `"CR batch labs + daily digest notifications"`       |
 

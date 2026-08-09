@@ -100,7 +100,7 @@ class _AdminOnWeb extends StatelessWidget {
   const _AdminOnWeb();
 
   static const String consoleUrl =
-      'https://ganga2006.github.io/attendx/admin/';
+      'https://attendx-eee.github.io/attendx/admin/';
 
   @override
   Widget build(BuildContext context) {

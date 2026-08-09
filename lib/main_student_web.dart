@@ -132,7 +132,7 @@ class _AccountGate extends StatelessWidget {
             title: 'This is the student app',
             body: 'Admin accounts use the console, which runs on a '
                 'computer rather than a phone.',
-            link: 'https://ganga2006.github.io/attendx/admin/',
+            link: 'https://attendx-eee.github.io/attendx/admin/',
           );
         }
 
@@ -142,7 +142,7 @@ class _AccountGate extends StatelessWidget {
             body: 'Capturing attendance means scanning a room with the '
                 'camera, which a browser cannot do. Install the Android '
                 'app to mark classes.',
-            link: 'https://ganga2006.github.io/attendx/',
+            link: 'https://attendx-eee.github.io/attendx/',
           );
         }
 
