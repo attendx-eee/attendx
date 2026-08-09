@@ -66,6 +66,10 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
 
   int _framesProcessed = 0;
 
+  /// Rotation last given to ML Kit — decides whether its coordinate
+  /// space is the buffer's dimensions or their transpose.
+  InputImageRotation _lastRotation = InputImageRotation.rotation90deg;
+
   /// Only every Nth frame is put through recognition. The camera
   /// delivers ~30 a second and a full pass over a roomful of faces takes
   /// far longer than 33ms; without this the queue grows until the app
@@ -188,6 +192,14 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
       final imageSize =
           Size(image.width.toDouble(), image.height.toDouble());
 
+      // ML Kit's coordinate space, which is the buffer transposed for
+      // the quarter-turn rotations.
+      final mlKitFrameWidth =
+          (_lastRotation == InputImageRotation.rotation90deg ||
+                  _lastRotation == InputImageRotation.rotation270deg)
+              ? image.height.toDouble()
+              : image.width.toDouble();
+
       final labels = <FaceLabel>[];
       File? frameFile;
 
@@ -200,8 +212,12 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
         );
 
         // Too far away to identify honestly — drawn, but not guessed at.
-        if (!_recogniser.isFaceUsable(
-            face.boundingBox, image.width.toDouble())) {
+        //
+        // Measured against ML Kit's own frame width, which is the
+        // buffer's *height* under a 90 or 270 degree rotation. Using
+        // `image.width` compares a box in a 720-wide space against 1280
+        // and makes every face look proportionally tiny.
+        if (!_recogniser.isFaceUsable(face.boundingBox, mlKitFrameWidth)) {
           labels.add(FaceLabel(
               box: box, name: null, confirmed: false, score: 0));
           continue;
@@ -324,6 +340,8 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
         rotation = InputImageRotationValue.fromRawValue(compensated) ??
             InputImageRotation.rotation0deg;
       }
+
+      _lastRotation = rotation;
 
       final format =
           InputImageFormatValue.fromRawValue(image.format.raw) ??

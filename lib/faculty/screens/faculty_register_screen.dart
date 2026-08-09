@@ -9,6 +9,9 @@ import '../../core/theme/app_radius.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../admin/models/faculty_model.dart';
 import '../../admin/services/master_data_service.dart';
+import '../../screens/face_enrollment_screen.dart';
+import '../../screens/role_router.dart';
+import '../../services/enrollment/scan_harvester.dart';
 import '../models/faculty_account.dart';
 
 /// Faculty sign-up.
@@ -18,12 +21,10 @@ import '../models/faculty_account.dart';
 /// member signs in with a password to mark other people's attendance,
 /// they don't check in through the gate themselves.
 ///
-/// The employee ID has to match a faculty record an admin already
-/// created in Master Data. That isn't an approval step (accounts go live
-/// immediately) — it's the link that ties this login to the timetable,
-/// so the app knows which periods are theirs. It also means only people
-/// the department has actually listed as staff can create an account
-/// capable of marking a class present.
+/// Anyone can sign up; the account is created pending. An admin then
+/// checks the details, corrects anything wrong, and links it to a
+/// timetable record — that link is what decides whose classes this
+/// person can mark.
 class FacultyRegisterScreen extends StatefulWidget {
   const FacultyRegisterScreen({super.key});
 
@@ -35,7 +36,6 @@ class FacultyRegisterScreen extends StatefulWidget {
 class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
   final _formKey = GlobalKey<FormState>();
 
-  final _employeeId = TextEditingController();
   final _name = TextEditingController();
   final _shortName = TextEditingController();
   final _email = TextEditingController();
@@ -49,6 +49,15 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
   /// link when approving.
   String? _pickedFacultyId;
 
+  /// Created once, not per build.
+  ///
+  /// Calling getFaculty() inside build() makes a fresh Firestore
+  /// subscription on every setState — every dropdown change, every
+  /// keystroke that triggers a rebuild — and each one restarts the
+  /// StreamBuilder in its waiting state, so the list flickers empty.
+  late final Stream<List<FacultyModel>> _facultyStream =
+      MasterDataService.instance.getFaculty();
+
   String _designation = FacultyAccount.designations[2];
   String _qualification = FacultyAccount.qualifications.first;
 
@@ -59,7 +68,6 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
   @override
   void dispose() {
     for (final c in [
-      _employeeId,
       _name,
       _shortName,
       _email,
@@ -82,7 +90,6 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
     });
 
     final email = _email.text.trim().toLowerCase();
-    final employeeId = _employeeId.text.trim();
     final name = _name.text.trim();
 
     UserCredential? credential;
@@ -101,7 +108,6 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
       // which is also what decides whose classes they can mark.
       final account = FacultyAccount(
         uid: uid,
-        employeeId: employeeId,
         name: name,
         shortName: _shortName.text.trim(),
         designation: _designation,
@@ -117,23 +123,33 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
           .doc(uid)
           .set(account.toMap());
 
-      // Creating the account signed them in as a side effect. Sign back
-      // out so they arrive at the login screen deliberately, rather than
-      // being dropped into the app from a form they thought only made an
-      // account.
-      await FirebaseAuth.instance.signOut();
+      if (!mounted) return;
+
+      // Straight into face enrollment, same as a student registering.
+      //
+      // Creating the account already signed them in, so there's no
+      // reason to bounce them out to the login screen and back. Doing it
+      // now also means the duplicate-face check runs while the account
+      // is still pending — catching someone enrolling a face already on
+      // file *before* an admin approves them, rather than after.
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const FaceEnrollmentScreen(
+            mandatory: false,
+            scanProfile: ScanProfile.frontalOnly,
+          ),
+        ),
+      );
 
       if (!mounted) return;
 
-      Navigator.pop(context, true);
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Account created. An admin will approve it before '
-              'your classes appear.'),
-          backgroundColor: AppColors.success,
-          behavior: SnackBarBehavior.floating,
-        ),
+      // Then the dashboard, which shows the waiting-for-approval state
+      // until an admin links them to a timetable record.
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const RoleRouter()),
+        (_) => false,
       );
     } on FirebaseAuthException catch (e) {
       setState(() {
@@ -193,20 +209,34 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
               ),
               SizedBox(height: Responsive.h(6)),
               Text(
-                'Your employee ID must already be on the department staff '
-                'list. This links your login to the classes you teach.',
+                'Pick your name if it is already on the department list, '
+                'or just fill this in. An admin checks the details before '
+                'your classes appear.',
                 style: AppTextStyles.caption,
               ),
               SizedBox(height: Responsive.h(22)),
 
-              // Picking your name off the department list fills in the
-              // rest. Typing an employee ID from memory is the step
-              // people get wrong, and a mistyped one means the admin
-              // can't match the request to a real member of staff.
+              // Optional shortcut: picking a name off the department
+              // list pre-fills the fields below. Skipping it is fine —
+              // the admin sets the real link at approval either way.
               StreamBuilder<List<FacultyModel>>(
-                stream: MasterDataService.instance.getFaculty(),
+                stream: _facultyStream,
                 builder: (context, snapshot) {
                   final faculty = snapshot.data ?? const <FacultyModel>[];
+                  final loading =
+                      snapshot.connectionState == ConnectionState.waiting;
+
+                  // An empty list and a refused read look identical once
+                  // `?? const []` has done its work, and they need
+                  // different fixes — so say which it is.
+                  final helper = snapshot.hasError
+                      ? "Couldn't load the staff list: ${snapshot.error}"
+                      : loading
+                          ? 'Loading the staff list…'
+                          : faculty.isEmpty
+                              ? 'No staff on file yet — fill the fields in '
+                                  'by hand'
+                              : 'Fills your ID and initials automatically';
 
                   return Padding(
                     padding: EdgeInsets.only(bottom: Responsive.h(14)),
@@ -215,10 +245,11 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
                       isExpanded: true,
                       decoration: InputDecoration(
                         labelText: 'Find your name on the staff list',
-                        helperText: faculty.isEmpty
-                            ? 'Staff list unavailable — fill the fields below'
-                            : 'Fills your ID and initials automatically',
-                        helperMaxLines: 2,
+                        helperText: helper,
+                        helperStyle: snapshot.hasError
+                            ? const TextStyle(color: AppColors.danger)
+                            : null,
+                        helperMaxLines: 3,
                         prefixIcon: const Icon(Icons.person_search_outlined,
                             size: 20),
                         filled: true,
@@ -231,9 +262,9 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
                           .map((f) => DropdownMenuItem(
                                 value: f.id,
                                 child: Text(
-                                  f.employeeId.isEmpty
+                                  f.shortName.isEmpty
                                       ? f.name
-                                      : '${f.name} — ${f.employeeId}',
+                                      : '${f.name} (${f.shortName})',
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ))
@@ -244,7 +275,6 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
                             faculty.firstWhere((f) => f.id == id);
                         setState(() {
                           _pickedFacultyId = id;
-                          _employeeId.text = picked.employeeId;
                           _name.text = picked.name;
                           _shortName.text = picked.shortName;
                           if (picked.designation.isNotEmpty &&
@@ -260,14 +290,6 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
               ),
 
               _field(
-                controller: _employeeId,
-                label: 'Employee ID *',
-                icon: Icons.badge_outlined,
-                validator: (v) => (v == null || v.trim().isEmpty)
-                    ? 'Employee ID is required'
-                    : null,
-              ),
-              _field(
                 controller: _name,
                 label: 'Full name *',
                 icon: Icons.person_outline,
@@ -277,7 +299,7 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
               ),
               _field(
                 controller: _shortName,
-                label: 'Initials on the timetable (e.g. KRS)',
+                label: 'Initials on the timetable (e.g. TRJ)',
                 icon: Icons.short_text_rounded,
                 textCapitalization: TextCapitalization.characters,
               ),

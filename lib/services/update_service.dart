@@ -15,12 +15,108 @@ import '../core/theme/app_colors.dart';
 /// Called on the login screen. If a newer versionCode exists, the user
 /// is prompted to download the new APK from the website; when
 /// `forceUpdate` is true the dialog cannot be dismissed.
+/// What a manual update check found.
+class UpdateStatus {
+  /// True when a newer build is published.
+  final bool available;
+
+  /// The version the user is running.
+  final String current;
+
+  /// The published version. Same as [current] when up to date.
+  final String latest;
+
+  final String notes;
+  final String apkUrl;
+
+  /// Set when the check itself failed — no network, rules, bad doc.
+  final String? error;
+
+  const UpdateStatus({
+    required this.available,
+    required this.current,
+    required this.latest,
+    this.notes = '',
+    this.apkUrl = '',
+    this.error,
+  });
+}
+
 class UpdateService {
   UpdateService._();
 
   static final UpdateService instance = UpdateService._();
 
   bool _checkedThisSession = false;
+
+  /// Checks for a newer build without showing anything.
+  ///
+  /// The automatic prompt on the dashboard only fires once per session
+  /// and only when an update exists — which leaves no way to answer "am
+  /// I on the latest version?" if you dismissed it or never saw it.
+  /// This backs the Settings entry that does.
+  Future<UpdateStatus> checkStatus() async {
+    const current = AppConfig.appVersion;
+
+    if (kIsWeb) {
+      return const UpdateStatus(
+        available: false,
+        current: current,
+        latest: current,
+      );
+    }
+
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection(AppConfig.appMetaCollection)
+          .doc(AppConfig.appMetaDoc)
+          .get();
+
+      final data = snapshot.data();
+      if (data == null) {
+        return const UpdateStatus(
+          available: false,
+          current: current,
+          latest: current,
+          error: 'No release information published yet.',
+        );
+      }
+
+      final latestCode = ((data['latestVersionCode'] ?? 0) as num).toInt();
+      final latestVersion =
+          (data['latestVersion'] ?? current).toString();
+
+      return UpdateStatus(
+        available: latestCode > AppConfig.appVersionCode,
+        current: current,
+        latest: latestVersion,
+        notes: (data['notes'] ?? '').toString(),
+        apkUrl: (data['apkUrl'] ?? '').toString(),
+      );
+    } catch (e) {
+      return UpdateStatus(
+        available: false,
+        current: current,
+        latest: current,
+        error: 'Could not reach the update server.',
+      );
+    }
+  }
+
+  /// Opens the APK link. Android's download manager takes it from there
+  /// and offers to install once the file lands.
+  Future<bool> downloadUpdate(String apkUrl) async {
+    if (apkUrl.isEmpty) return false;
+    try {
+      return await launchUrl(
+        Uri.parse(apkUrl),
+        mode: LaunchMode.externalApplication,
+      );
+    } catch (e) {
+      debugPrint('Update download failed: $e');
+      return false;
+    }
+  }
 
   Future<void> checkForUpdate(BuildContext context) async {
     if (kIsWeb) return; // the web app is always the latest deployment

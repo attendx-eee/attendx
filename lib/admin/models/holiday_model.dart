@@ -184,9 +184,17 @@ class SeedHolidays {
     ),
   ];
 
-  /// Single-day closures that fall on working days of this academic
-  /// year. Festivals inside a vacation block are deliberately omitted —
-  /// they'd be duplicates.
+  /// Single-day closures falling on working days of this academic year,
+  /// each with the occasion named so the calendar explains itself.
+  ///
+  /// Festivals inside a vacation block are deliberately left out —
+  /// Sankranti, for instance, sits inside the Christmas/Pongal break and
+  /// would only be a duplicate entry.
+  ///
+  /// Everything here is editable. A date the university decides to work
+  /// through can be deleted, and one it closes at short notice can be
+  /// added from the Holidays screen or straight from a student's
+  /// calendar.
   static const List<Holiday> auSingleDays2026 = [
     Holiday(
         date: '2026-08-15',
@@ -195,11 +203,19 @@ class SeedHolidays {
     Holiday(
         date: '2026-08-26',
         name: 'Eid Milad-un-Nabi',
-        reason: 'Subject to moon sighting'),
+        reason: 'Festival holiday — date subject to moon sighting'),
+    Holiday(
+        date: '2026-08-28',
+        name: 'Raksha Bandhan',
+        reason: 'Festival holiday'),
+    Holiday(
+        date: '2026-09-04',
+        name: 'Sri Krishna Janmashtami',
+        reason: 'Festival holiday'),
     Holiday(
         date: '2026-09-14',
         name: 'Vinayaka Chavithi',
-        reason: 'Festival holiday'),
+        reason: 'Ganesh Chaturthi — festival holiday'),
     Holiday(
         date: '2026-10-02',
         name: 'Gandhi Jayanti',
@@ -209,13 +225,35 @@ class SeedHolidays {
         name: 'Deepavali',
         reason: 'Festival of lights'),
     Holiday(
+        date: '2026-11-24',
+        name: 'Guru Nanak Jayanti',
+        reason: 'Festival holiday'),
+    // Christmas isn't listed: 25 December sits inside the
+    // Christmas/Pongal vacation, as does Sankranti in January.
+    Holiday(
         date: '2027-01-26',
         name: 'Republic Day',
         reason: 'National holiday'),
     Holiday(
+        date: '2027-02-15',
+        name: 'Maha Shivaratri',
+        reason: 'Festival holiday'),
+    Holiday(
+        date: '2027-03-22',
+        name: 'Holi',
+        reason: 'Festival holiday'),
+    Holiday(
+        date: '2027-04-08',
+        name: 'Ugadi',
+        reason: 'Telugu New Year'),
+    Holiday(
         date: '2027-04-14',
         name: 'Dr B.R. Ambedkar Jayanti',
         reason: 'National holiday'),
+    Holiday(
+        date: '2027-04-15',
+        name: 'Sri Rama Navami',
+        reason: 'Festival holiday'),
     Holiday(
         date: '2027-05-01',
         name: 'May Day',

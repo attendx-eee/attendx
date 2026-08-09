@@ -3,9 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'role_router.dart';
 import 'register_screen.dart';
-import '../admin/master_data/master_home.dart';
 import '../faculty/screens/faculty_register_screen.dart';
-import '../core/constants/app_config.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_radius.dart';
 import '../services/auth_service.dart';
@@ -22,12 +20,10 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
-  final secretKeyController = TextEditingController();
   final AuthService authService = AuthService();
 
   bool _isLoading = false;
   bool _obscurePassword = true;
-  bool _obscureSecretKey = true;
   bool _biometricAvailable = false;
 
   @override
@@ -105,7 +101,6 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     emailController.dispose();
     passwordController.dispose();
-    secretKeyController.dispose();
     super.dispose();
   }
 
@@ -157,62 +152,6 @@ class _LoginScreenState extends State<LoginScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text("An error occurred: $e"),
-            backgroundColor: AppColors.danger,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  /// Admin logs in with just the secret key — it is the password of the
-  /// fixed admin account, so this is a real authenticated session.
-  Future<void> _handleAdminLogin() async {
-    final key = secretKeyController.text.trim();
-
-    if (key.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Enter the admin secret key"),
-          backgroundColor: AppColors.warning,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      return;
-    }
-
-    setState(() => _isLoading = true);
-
-    try {
-      final result = await authService.loginUser(
-        email: AppConfig.adminEmail,
-        password: key,
-      );
-
-      if (!mounted) return;
-
-      if (result == null) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-              builder: (context) => MasterHome(onLogout: signOutToLogin)),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Invalid admin secret key."),
-            backgroundColor: AppColors.danger,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Invalid admin secret key."),
             backgroundColor: AppColors.danger,
             behavior: SnackBarBehavior.floating,
           ),
@@ -344,102 +283,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   /// Admin login now lives behind the small icon in the top-right corner.
-  void _showAdminSheet() {
-    secretKeyController.clear();
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.surface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) => Padding(
-        padding: EdgeInsets.only(
-          left: 24,
-          right: 24,
-          top: 24,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 24,
-        ),
-        child: StatefulBuilder(
-          builder: (context, setSheetState) => Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Icon(Icons.admin_panel_settings_rounded,
-                  size: 40, color: AppColors.primary),
-              const SizedBox(height: 10),
-              const Text(
-                'Admin Access',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                'Enter the department secret key',
-                textAlign: TextAlign.center,
-                style:
-                    TextStyle(fontSize: 12.5, color: AppColors.textSecondary),
-              ),
-              const SizedBox(height: 20),
-              TextField(
-                controller: secretKeyController,
-                obscureText: _obscureSecretKey,
-                autofocus: true,
-                onSubmitted: (_) {
-                  Navigator.pop(context);
-                  _handleAdminLogin();
-                },
-                decoration: _inputDecoration(
-                  label: 'Admin Secret Key',
-                  icon: Icons.vpn_key_rounded,
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                      _obscureSecretKey
-                          ? Icons.visibility_off_outlined
-                          : Icons.visibility_outlined,
-                      color: AppColors.textSecondary,
-                      size: 20,
-                    ),
-                    onPressed: () => setSheetState(
-                        () => _obscureSecretKey = !_obscureSecretKey),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-              SizedBox(
-                height: 52,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _handleAdminLogin();
-                  },
-                  icon: const Icon(Icons.admin_panel_settings_rounded),
-                  label: const Text('Enter Master Data',
-                      style: TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w700)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppRadius.sm),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                'Only department admins hold this key. All access is logged.',
-                textAlign: TextAlign.center,
-                style:
-                    TextStyle(fontSize: 11.5, color: AppColors.textSecondary),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+
 
   InputDecoration _inputDecoration({
     required String label,
@@ -484,20 +328,11 @@ class _LoginScreenState extends State<LoginScreen> {
         child: SafeArea(
           child: Stack(
             children: [
-              // Small admin entry — tucked in the top-right corner.
-              Positioned(
-                top: 4,
-                right: 4,
-                child: IconButton(
-                  tooltip: 'Admin login',
-                  onPressed: _isLoading ? null : _showAdminSheet,
-                  icon: const Icon(
-                    Icons.admin_panel_settings_outlined,
-                    size: 22,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ),
+              // Admin sign-in used to live here as a small icon. It's
+              // gone: the console is a desktop tool now, served at
+              // /attendx/admin/, and the department runs it from a PC.
+              // Leaving a second door into the same account on every
+              // student's phone bought nothing and widened the target.
               Center(
             child: SingleChildScrollView(
               physics: const BouncingScrollPhysics(),

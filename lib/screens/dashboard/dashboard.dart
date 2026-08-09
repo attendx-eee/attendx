@@ -28,12 +28,12 @@ import '../attendance/attendance_screen.dart';
 import '../../notifications/notification_screen.dart';
 import '../../notifications/services/notification_service.dart';
 import '../../notifications/services/local_notification_service.dart';
-import '../../admin/master_data/master_home.dart';
 import '../../admin/services/timetable_service.dart';
 import '../../admin/models/period_model.dart';
 import '../../core/constants/app_config.dart';
 import '../../more/account_settings_screen.dart';
 import '../../services/update_service.dart';
+import '../../cr/cr_lab_attendance_screen.dart';
 import '../../cr/cr_timetable_screen.dart';
 import '../../attendance/models/attendance_marker.dart';
 import '../../attendance/screens/student_directory_screen.dart';
@@ -479,7 +479,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final data = studentData!.data()!;
     final String role = (data['role'] ?? 'student').toString().toLowerCase();
     final bool isCR = role == 'cr';
-    final bool isAdmin = role == 'hod' || role == 'office';
 
     // Only the headline percentage is needed here now — the present /
     // absent / total split it comes from is shown once, on the
@@ -544,26 +543,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Role-gated tools: Master Data for admins, timetable tools for CRs.
-            if (isAdmin) ...[
-              FadeSlideIn(
-                child: MasterTile(
-                  icon: Icons.admin_panel_settings_rounded,
-                  title: "Master Data Management",
-                  subtitle: "Manage faculty, subjects, rooms & more",
-                  color: AppColors.primary,
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const MasterHome(),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              SizedBox(height: Responsive.h(6)),
-            ],
+            // The Master Data tile used to sit here for admins. Admin is
+            // web-only now — RoleRouter redirects those accounts to the
+            // console — so nothing on a phone needs to open it, and
+            // dropping the tile also drops the whole admin tree out of
+            // the student build.
 
             if (!isCR && data['crStatus'] == 'pending') ...[
               FadeSlideIn(
@@ -651,6 +635,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             year: AppConfig.yearOf(data),
                           ),
                         ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              // Labs only, and only the CR's own batch. A lab is a dozen
+              // students bent over equipment with their backs to the
+              // room — the CR knows who turned up faster and more
+              // reliably than a camera can work it out.
+              FadeSlideIn(
+                delay: const Duration(milliseconds: 60),
+                child: MasterTile(
+                  icon: Icons.science_rounded,
+                  title: "Mark Lab Attendance",
+                  subtitle:
+                      "Today's labs for your batch — tick who's present",
+                  color: AppColors.tealDark,
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            CrLabAttendanceScreen(studentData: data),
                       ),
                     );
                   },

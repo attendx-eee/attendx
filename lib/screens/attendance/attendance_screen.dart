@@ -6,7 +6,9 @@ import 'package:intl/intl.dart';
 import '../../core/constants/app_config.dart';
 import '../../core/responsive/responsive.dart';
 import '../../core/theme/app_spacing.dart';
+import '../../attendance/models/day_summary.dart';
 import '../../attendance/services/manual_attendance_service.dart';
+import '../../faculty/services/period_attendance_service.dart';
 import '../../services/attendance_service.dart';
 import '../../services/firestore_service.dart';
 
@@ -15,6 +17,7 @@ import 'widgets/attendance_summary_card.dart';
 import 'widgets/attendance_calendar_card.dart';
 import 'widgets/subject_attendance_card.dart';
 import 'widgets/attendance_history_card.dart';
+import 'widgets/theory_lab_card.dart';
 
 /// Attendance overview computed entirely from Raspberry Pi check-in
 /// events (`attendance_events`) laid over the timetable — no hardcoded
@@ -38,7 +41,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   // Current month
   Map<int, String> _calendarStatuses = {};
+  Map<int, String> _calendarFractions = {};
   String _monthLabel = '';
+
+  /// Per-period totals for the current month. Empty until any faculty
+  /// or CR has actually marked a period.
+  AttendanceTotals _periodTotals = AttendanceTotals();
 
   List<SubjectAttendance> _subjects = [];
   List<AttendanceHistory> _history = [];
@@ -113,11 +121,33 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       final todayId = AppConfig.dateId(today);
       final start = _service.semesterStart();
 
+      // Period-level attendance for the current month. This is the
+      // finer-grained signal: the Pi says the student walked into the
+      // building, the period records say which classes they were
+      // actually in. Where both exist the periods win, because a day
+      // marked present by the gate but with one of two classes attended
+      // is a half day, not a whole one.
+      var periodDays = <int, DaySummary>{};
+      var periodTotals = AttendanceTotals();
+      try {
+        final summary = await PeriodAttendanceService.instance.monthSummary(
+          uid: uid,
+          studentData: student,
+          calendarYear: today.year,
+          month: today.month,
+        );
+        periodDays = summary.days;
+        periodTotals = summary.totals;
+      } catch (e) {
+        debugPrint('Period summary load failed: $e');
+      }
+
       // Per-subject tallies: subject -> [attended, total]
       final subjectTotals = <String, List<int>>{};
 
       int presentDays = 0, absentDays = 0, totalDays = 0;
       final calendar = <int, String>{};
+      final fractions = <int, String>{};
 
       for (var date = start;
           !date.isAfter(today);
@@ -169,8 +199,35 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
         // Current month calendar colouring.
         if (isCurrentMonth) {
+          final summary = periodDays[date.day];
+
+          // Only treat the period records as authoritative for a day
+          // once somebody has actually marked something on it.
+          final marks = (summary != null &&
+                  summary.total > 0 &&
+                  summary.marked > 0)
+              ? summary
+              : null;
+
+          if (marks != null) {
+            fractions[date.day] = marks.fraction;
+          }
+
           if (isToday) {
             calendar[date.day] = 'today';
+          } else if (marks != null) {
+            // Marked classes beat the gate event for this day.
+            switch (marks.status) {
+              case DayAttendance.full:
+                calendar[date.day] = verdict.late ? 'late' : 'present';
+              case DayAttendance.partial:
+                calendar[date.day] = 'partial';
+              case DayAttendance.absent:
+                calendar[date.day] = 'absent';
+              case DayAttendance.noClass:
+              case DayAttendance.notMarked:
+                break;
+            }
           } else if (verdict.present) {
             calendar[date.day] = verdict.late ? 'late' : 'present';
           } else if (event != null) {
@@ -183,6 +240,14 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
         // Per-subject attendance (period-level overlap with the
         // student's check-in/check-out interval).
+        //
+        // Skipped for days a faculty member or CR actually marked —
+        // inferring "was in the room" from a gate timestamp is a guess,
+        // and a guess shouldn't sit alongside a register in the same
+        // tally. Those days are folded in from the real records below.
+        final marked = isCurrentMonth ? periodDays[date.day]?.marked ?? 0 : 0;
+        if (marked > 0) continue;
+
         for (final period in periods) {
           final tally = subjectTotals.putIfAbsent(period.subject, () => [0, 0]);
           if (isToday) {
@@ -201,6 +266,25 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             tally[0]++;
           }
         }
+      }
+
+      // Fold in the classes a faculty member or CR actually registered
+      // this month. These replace nothing — the days they cover were
+      // skipped above — they just add the counts that came from a
+      // register rather than from a gate timestamp.
+      try {
+        final marked = await PeriodAttendanceService.instance.subjectTotals(
+          uid: uid,
+          studentData: student,
+          month: DateFormat('yyyy-MM').format(today),
+        );
+        marked.forEach((subject, counts) {
+          final tally = subjectTotals.putIfAbsent(subject, () => [0, 0]);
+          tally[0] += counts.attended;
+          tally[1] += counts.total;
+        });
+      } catch (e) {
+        debugPrint('Subject totals load failed: $e');
       }
 
       // Subjects list, sorted worst-first so problems surface.
@@ -285,6 +369,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         _totalDays = totalDays;
 
         _calendarStatuses = calendar;
+        _calendarFractions = fractions;
+        _periodTotals = periodTotals;
         _monthLabel = DateFormat('MMMM yyyy').format(today);
 
         _subjects = subjects;
@@ -384,7 +470,15 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             month: today.month,
                             monthLabel: _monthLabel,
                             dayStatuses: _calendarStatuses,
+                            dayFractions: _calendarFractions,
                           ),
+                          if (_periodTotals.total > 0) ...[
+                            SizedBox(height: Responsive.h(20)),
+                            TheoryLabCard(
+                              totals: _periodTotals,
+                              monthLabel: _monthLabel,
+                            ),
+                          ],
                           SizedBox(height: Responsive.h(20)),
                           SubjectAttendanceCard(subjects: _subjects),
                           // The monthly present / absent / late tiles

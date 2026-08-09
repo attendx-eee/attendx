@@ -9,8 +9,15 @@ class AttendanceCalendarCard extends StatelessWidget {
   final int month;
   final String monthLabel;
 
-  /// day-of-month -> 'present' | 'absent' | 'late' | 'today'
+  /// day-of-month -> 'present' | 'partial' | 'absent' | 'late' | 'today'
   final Map<int, String> dayStatuses;
+
+  /// day-of-month -> "1/2", shown under the date.
+  ///
+  /// A colour alone can't tell you whether a partial day was one class
+  /// out of two or five out of six, and that difference is the whole
+  /// point of counting periods instead of days.
+  final Map<int, String> dayFractions;
 
   const AttendanceCalendarCard({
     super.key,
@@ -18,6 +25,7 @@ class AttendanceCalendarCard extends StatelessWidget {
     required this.month,
     required this.monthLabel,
     this.dayStatuses = const {},
+    this.dayFractions = const {},
   });
 
   @override
@@ -106,10 +114,15 @@ class AttendanceCalendarCard extends StatelessWidget {
 
               Color color = Colors.transparent;
               Color text = Colors.black87;
+              final fraction = dayFractions[day];
 
               switch (dayStatuses[day]) {
                 case 'present':
                   color = Colors.green;
+                  text = Colors.white;
+                  break;
+                case 'partial':
+                  color = Colors.amber.shade600;
                   text = Colors.white;
                   break;
                 case 'absent':
@@ -137,13 +150,30 @@ class AttendanceCalendarCard extends StatelessWidget {
                   ),
                 ),
                 alignment: Alignment.center,
-                child: Text(
-                  "$day",
-                  style: TextStyle(
-                    color: text,
-                    fontWeight: FontWeight.w600,
-                    fontSize: Responsive.sp(12),
-                  ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      "$day",
+                      style: TextStyle(
+                        color: text,
+                        fontWeight: FontWeight.w600,
+                        fontSize: Responsive.sp(12),
+                      ),
+                    ),
+                    if (fraction != null)
+                      Text(
+                        fraction,
+                        maxLines: 1,
+                        style: TextStyle(
+                          color: color == Colors.transparent
+                              ? Colors.grey
+                              : Colors.white70,
+                          fontWeight: FontWeight.w600,
+                          fontSize: Responsive.sp(8),
+                        ),
+                      ),
+                  ],
                 ),
               );
             },
@@ -154,24 +184,29 @@ class AttendanceCalendarCard extends StatelessWidget {
           Wrap(
             spacing: Responsive.w(16),
             runSpacing: Responsive.h(12),
-            children: const [
+            children: [
 
-              _Legend(
+              const _Legend(
                 Colors.green,
-                "Present",
+                "All classes",
               ),
 
               _Legend(
+                Colors.amber.shade600,
+                "Some classes",
+              ),
+
+              const _Legend(
                 Colors.red,
                 "Absent",
               ),
 
-              _Legend(
+              const _Legend(
                 Colors.orange,
                 "Late",
               ),
 
-              _Legend(
+              const _Legend(
                 Colors.blue,
                 "Today",
               ),

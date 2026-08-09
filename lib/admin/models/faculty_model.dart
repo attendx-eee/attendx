@@ -4,13 +4,6 @@ class FacultyModel {
   final String shortName;
   final String designation;
 
-  /// College staff number.
-  ///
-  /// Optional, and blank on records created before faculty could sign
-  /// in. When present it's what a faculty member types at registration
-  /// to claim this record — a stable key that survives the name
-  /// spelling changing, which a name match doesn't.
-  final String employeeId;
 
   final bool active;
 
@@ -19,7 +12,6 @@ class FacultyModel {
     required this.name,
     required this.shortName,
     required this.designation,
-    this.employeeId = '',
     required this.active,
   });
 
@@ -32,7 +24,6 @@ class FacultyModel {
       name: map['name'] ?? '',
       shortName: map['shortName'] ?? '',
       designation: map['designation'] ?? '',
-      employeeId: map['employeeId'] ?? '',
       active: map['active'] ?? true,
     );
   }
@@ -42,7 +33,6 @@ class FacultyModel {
       'name': name,
       'shortName': shortName,
       'designation': designation,
-      'employeeId': employeeId,
       'active': active,
     };
   }

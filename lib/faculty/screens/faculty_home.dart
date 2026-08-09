@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../admin/models/period_model.dart';
@@ -21,6 +22,7 @@ import '../models/faculty_account.dart';
 import '../models/period_attendance.dart';
 import '../services/period_attendance_service.dart';
 import 'classroom_scan_screen.dart';
+import 'faculty_settings_screen.dart';
 
 /// A period this faculty member teaches today, with the year it's for.
 class _TodayPeriod {
@@ -55,6 +57,15 @@ class _FacultyHomeState extends State<FacultyHome> {
   String? _error;
   List<_TodayPeriod> _today = const [];
 
+  /// The live account, re-read on every refresh.
+  ///
+  /// The one passed in was resolved once, when RoleRouter built this
+  /// screen. Approval happens elsewhere and later, so relying on that
+  /// snapshot meant a newly-approved lecturer stared at the waiting
+  /// screen until they killed the app — pulling to refresh did nothing,
+  /// because nothing re-read the field that had changed.
+  late FacultyAccount _account = widget.account;
+
   /// Periods already marked today, keyed "year:periodNo".
   ///
   /// Keyed by both because period 3 for first years and period 3 for
@@ -64,9 +75,9 @@ class _FacultyHomeState extends State<FacultyHome> {
 
   DateTime get _now => DateTime.now();
 
-  String get _department => widget.account.department.isEmpty
+  String get _department => _account.department.isEmpty
       ? AppConfig.department
-      : widget.account.department;
+      : _account.department;
 
   @override
   void initState() {
@@ -115,7 +126,7 @@ class _FacultyHomeState extends State<FacultyHome> {
 
         for (final p in periods) {
           if (p.isFree || p.subject.isEmpty) continue;
-          if (p.facultyId != widget.account.facultyId) continue;
+          if (p.facultyId != _account.facultyId) continue;
           mine.add(_TodayPeriod(period: p, year: year));
         }
       }
@@ -140,18 +151,23 @@ class _FacultyHomeState extends State<FacultyHome> {
         }
       }
 
-      // Refreshed alongside the timetable so the tile reflects a face
-      // enrolled moments ago without needing its own reload.
+      // Re-read alongside the timetable, so one refresh picks up both a
+      // face enrolled moments ago and an approval granted since open.
       final me = await FirebaseFirestore.instance
           .collection('students')
           .doc(widget.account.uid)
           .get();
 
+      final data = me.data();
+
       if (mounted) {
         setState(() {
           _today = mine;
           _marked = marked;
-          _faceEnrolled = me.data()?['faceEnrolled'] == true;
+          if (data != null) {
+            _account = FacultyAccount.fromMap(widget.account.uid, data);
+          }
+          _faceEnrolled = data?['faceEnrolled'] == true;
           _loading = false;
         });
       }
@@ -165,6 +181,125 @@ class _FacultyHomeState extends State<FacultyHome> {
     }
   }
 
+  /// Entry point for the Capture card.
+  ///
+  /// Straight into the scan when there's only one candidate, a picker
+  /// when there are several, and the whole week's subjects when nothing
+  /// is scheduled — a lecturer taking an extra class on a Sunday still
+  /// needs to be able to mark it.
+  Future<void> _startCapture() async {
+    if (_today.length == 1) {
+      await _openScan(_today.first);
+      return;
+    }
+
+    final candidates =
+        _today.isNotEmpty ? _today : await _allMyPeriodsThisWeek();
+
+    if (!mounted) return;
+
+    if (candidates.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No classes are assigned to you on the timetable '
+              'yet. Ask the office to add them.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final chosen = await showModalBottomSheet<_TodayPeriod>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius:
+            BorderRadius.vertical(top: Radius.circular(AppRadius.xl)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: Responsive.symmetric(horizontal: 12, vertical: 16),
+          children: [
+            Padding(
+              padding: Responsive.symmetric(horizontal: 8),
+              child: Text(
+                _today.isNotEmpty
+                    ? 'Which class are you marking?'
+                    : 'Nothing scheduled today — pick a subject',
+                style: AppTextStyles.title,
+              ),
+            ),
+            SizedBox(height: Responsive.h(10)),
+            ...candidates.map((entry) {
+              final done =
+                  _marked.containsKey('${entry.year}:${entry.period.periodNo}');
+              return ListTile(
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppRadius.sm)),
+                leading: Icon(
+                  done
+                      ? Icons.check_circle_rounded
+                      : Icons.menu_book_rounded,
+                  color: done ? AppColors.success : AppColors.primary,
+                ),
+                title: Text(entry.period.subject,
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(
+                  'Year ${entry.year} • ${entry.period.startTime}'
+                  '${entry.period.batch.isEmpty ? '' : ' • Batch ${entry.period.batch}'}'
+                  '${done ? ' • already marked' : ''}',
+                  style: AppTextStyles.caption,
+                ),
+                onTap: () => Navigator.pop(sheetContext, entry),
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+
+    if (chosen != null) await _openScan(chosen);
+  }
+
+  /// Every period this faculty member teaches across the week, used when
+  /// today has nothing on it.
+  Future<List<_TodayPeriod>> _allMyPeriodsThisWeek() async {
+    final mine = <_TodayPeriod>[];
+    final seen = <String>{};
+
+    try {
+      for (final day in AppConfig.weekDays) {
+        for (var year = 1; year <= 4; year++) {
+          final periods = await TimetableService.instance.getDaySchedule(
+            department: _department,
+            academicYear: AppConfig.academicYear,
+            year: year,
+            day: day,
+          );
+
+          for (final p in periods) {
+            if (p.isFree || p.subject.isEmpty) continue;
+            if (p.facultyId != _account.facultyId) continue;
+
+            // One entry per subject+year, not per timetable slot — the
+            // point is choosing what to mark, and the same subject
+            // appearing four times would just be noise.
+            final key = '${p.subject}|$year|${p.batch}';
+            if (!seen.add(key)) continue;
+
+            mine.add(_TodayPeriod(period: p, year: year));
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Weekly period lookup failed: $e');
+    }
+
+    mine.sort((a, b) => a.period.subject.compareTo(b.period.subject));
+    return mine;
+  }
+
   Future<void> _openScan(_TodayPeriod entry) async {
     final saved = await Navigator.push<bool>(
       context,
@@ -172,8 +307,8 @@ class _FacultyHomeState extends State<FacultyHome> {
         builder: (_) => ClassroomScanScreen(
           period: entry.period,
           year: entry.year,
-          facultyId: widget.account.facultyId,
-          facultyName: widget.account.name,
+          facultyId: _account.facultyId,
+          facultyName: _account.name,
           facultyUid: widget.account.uid,
         ),
       ),
@@ -256,16 +391,55 @@ class _FacultyHomeState extends State<FacultyHome> {
             icon: const Icon(Icons.refresh_rounded),
             onPressed: _loading ? null : _load,
           ),
-          IconButton(
-            tooltip: 'Sign out',
-            icon: const Icon(Icons.logout_rounded),
-            onPressed: _confirmLogout,
+          PopupMenuButton<String>(
+            tooltip: 'More',
+            icon: const Icon(Icons.more_vert_rounded),
+            onSelected: (value) {
+              switch (value) {
+                case 'settings':
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          FacultySettingsScreen(account: _account),
+                    ),
+                  ).then((_) {
+                    if (mounted) _load();
+                  });
+                case 'signout':
+                  _confirmLogout();
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: 'settings',
+                child: Row(
+                  children: [
+                    Icon(Icons.settings_outlined, size: 19),
+                    SizedBox(width: 12),
+                    Text('Settings'),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'signout',
+                child: Row(
+                  children: [
+                    Icon(Icons.logout_rounded,
+                        size: 19, color: AppColors.danger),
+                    SizedBox(width: 12),
+                    Text('Sign out',
+                        style: TextStyle(color: AppColors.danger)),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
       body: MaxWidthBody(
         maxWidth: 820,
-        child: !widget.account.isApproved
+        child: !_account.isApproved
             ? _buildAwaitingApproval()
             : _loading
                 ? const Center(child: CircularProgressIndicator())
@@ -281,7 +455,7 @@ class _FacultyHomeState extends State<FacultyHome> {
   /// timetable record. Without that link there are no periods to list
   /// and nothing this screen could usefully do.
   Widget _buildAwaitingApproval() {
-    final rejected = widget.account.isRejected;
+    final rejected = _account.isRejected;
 
     return ListView(
       padding: Responsive.all(24),
@@ -315,17 +489,58 @@ class _FacultyHomeState extends State<FacultyHome> {
         SizedBox(height: Responsive.h(10)),
         Text(
           rejected
-              ? (widget.account.decisionNote.isEmpty
+              ? (_account.decisionNote.isEmpty
                   ? 'Your staff account request was not approved. '
                       'Contact the department office.'
-                  : widget.account.decisionNote)
+                  : _account.decisionNote)
               : 'The department office needs to confirm you and link your '
                   'account to your name on the timetable. Your classes '
                   'appear here as soon as they do.',
           textAlign: TextAlign.center,
           style: AppTextStyles.caption,
         ),
-        SizedBox(height: Responsive.h(28)),
+        SizedBox(height: Responsive.h(26)),
+
+        // The way out of the waiting state. Approval happens on someone
+        // else's screen, so this is what the lecturer taps once the
+        // office tells them it's done.
+        if (!rejected)
+          Center(
+            child: ElevatedButton.icon(
+              onPressed: _loading ? null : _load,
+              icon: _loading
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.refresh_rounded, size: 18),
+              label: const Text('Check again'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: Responsive.symmetric(horizontal: 22, vertical: 12),
+              ),
+            ),
+          ),
+
+        // Face setup is worth finishing while they wait — it's the one
+        // thing they can do before approval, and doing it now means one
+        // less step later.
+        if (!_faceEnrolled) ...[
+          SizedBox(height: Responsive.h(16)),
+          Center(
+            child: TextButton.icon(
+              onPressed: _openFaceEnrollment,
+              icon: const Icon(Icons.face_rounded, size: 18),
+              label: const Text('Enroll my face'),
+            ),
+          ),
+        ],
+
+        SizedBox(height: Responsive.h(18)),
         Center(
           child: OutlinedButton.icon(
             onPressed: _confirmLogout,
@@ -357,6 +572,13 @@ class _FacultyHomeState extends State<FacultyHome> {
       ),
       children: [
         _buildHeader(),
+        SizedBox(height: Responsive.h(18)),
+
+        // The primary action, and deliberately the first thing on the
+        // screen. Marking a class is what a lecturer opens this app to
+        // do; everything else here is context for it.
+        _buildCaptureCard(),
+
         SizedBox(height: Responsive.h(20)),
         SectionHeader(
           title: 'Today — ${AppConfig.dayName(_now)}',
@@ -374,35 +596,117 @@ class _FacultyHomeState extends State<FacultyHome> {
                 onTap: () => _openScan(entry),
               )),
 
-        SizedBox(height: Responsive.h(18)),
-        const SectionHeader(
-          title: 'My account',
-          subtitle: 'Face sign-in for this device',
-        ),
-        SizedBox(height: Responsive.h(14)),
-
-        // Staff enroll a face for the same reason students do: so the
-        // app can confirm it's really them before something sensitive.
-        // It has nothing to do with them being marked present — faculty
-        // attendance isn't tracked here.
-        MasterTile(
-          icon: _faceEnrolled
-              ? Icons.face_retouching_natural_rounded
-              : Icons.face_rounded,
-          title: _faceEnrolled ? 'Update my face' : 'Enroll my face',
-          subtitle: _faceEnrolled
-              ? 'Re-scan if sign-in has been failing'
-              : 'Lets you confirm your identity without a password',
-          color: AppColors.teal,
-          onTap: _openFaceEnrollment,
-        ),
+        // Only shown when there's no face on file. Once it's set up,
+        // re-scanning is a Settings concern rather than something the
+        // home screen should keep advertising.
+        if (!_faceEnrolled) ...[
+          SizedBox(height: Responsive.h(18)),
+          const SectionHeader(
+            title: 'Finish setting up',
+            subtitle: 'One step left',
+          ),
+          SizedBox(height: Responsive.h(14)),
+          MasterTile(
+            icon: Icons.face_rounded,
+            title: 'Enroll my face',
+            subtitle: 'Lets you sign in without typing a password',
+            color: AppColors.teal,
+            onTap: _openFaceEnrollment,
+          ),
+        ],
       ],
     );
   }
 
+  /// The capture entry point.
+  ///
+  /// Kept separate from the period cards below because it answers a
+  /// different question. The cards say "what am I teaching today"; this
+  /// says "mark the class in front of me now" — and on a day with
+  /// several classes, or none scheduled at all, the lecturer still needs
+  /// a way in.
+  Widget _buildCaptureCard() {
+    final marked = _today
+        .where((e) =>
+            _marked.containsKey('${e.year}:${e.period.periodNo}'))
+        .length;
+
+    return Container(
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [AppColors.primary, AppColors.tealDark],
+        ),
+        borderRadius: BorderRadius.circular(AppRadius.xl),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primary.withValues(alpha: .3),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(AppRadius.xl),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.xl),
+          onTap: _startCapture,
+          child: Padding(
+            padding: Responsive.all(18),
+            child: Row(
+              children: [
+                Container(
+                  padding: Responsive.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(AppRadius.md),
+                  ),
+                  child: Icon(Icons.center_focus_strong_rounded,
+                      color: Colors.white, size: Responsive.sp(26)),
+                ),
+                SizedBox(width: Responsive.w(16)),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Capture attendance',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          fontSize: Responsive.sp(17),
+                        ),
+                      ),
+                      SizedBox(height: Responsive.h(4)),
+                      Text(
+                        _today.isEmpty
+                            ? 'Pick a subject and scan the room'
+                            : marked == _today.length
+                                ? 'All of today\'s classes marked — tap to redo one'
+                                : 'Scan the room to mark your subject',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: .9),
+                          fontSize: Responsive.sp(12),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.arrow_forward_ios_rounded,
+                    color: Colors.white70, size: Responsive.sp(15)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildHeader() {
-    final initial = widget.account.name.isNotEmpty
-        ? widget.account.name[0].toUpperCase()
+    final initial = _account.name.isNotEmpty
+        ? _account.name[0].toUpperCase()
         : '?';
 
     return Container(
@@ -431,7 +735,7 @@ class _FacultyHomeState extends State<FacultyHome> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  widget.account.name,
+                  _account.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -442,8 +746,8 @@ class _FacultyHomeState extends State<FacultyHome> {
                 ),
                 SizedBox(height: Responsive.h(3)),
                 Text(
-                  '${widget.account.designation} • '
-                  '${widget.account.department}',
+                  '${_account.designation} • '
+                  '${_account.department}',
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: .88),
                     fontSize: Responsive.sp(12),

@@ -163,9 +163,14 @@ class FaceQualityScorer {
       failures.add('Move back a little');
     }
 
-    if (centerOffset > 0.45) {
-      failures.add('Centre your face');
-    }
+    // Centring is scored but never fails a frame.
+    //
+    // It still nudges the ranking below — given two otherwise equal
+    // frames, the better-centred one is preferable — but a face that
+    // ML Kit found, at a sensible size, in decent light, is usable
+    // wherever it sits in the preview. Treating it as a hard failure
+    // rejected good frames on handsets where the offset reads high for
+    // reasons that have nothing to do with the student.
 
     if (brightness < QualityThresholds.minBrightness) {
       failures.add('Find brighter light');

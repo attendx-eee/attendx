@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../admin/services/batch_service.dart';
 import '../core/constants/app_config.dart';
+import '../services/update_service.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_radius.dart';
 import '../screens/face_enrollment_screen.dart';
@@ -657,6 +658,233 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
     }
   }
 
+  // ------------------------------------------------------------------
+  // App version & updates
+  // ------------------------------------------------------------------
+
+  UpdateStatus? _updateStatus;
+  bool _checkingUpdate = false;
+  bool _downloadingUpdate = false;
+
+  Future<void> _checkForUpdate() async {
+    setState(() => _checkingUpdate = true);
+    final status = await UpdateService.instance.checkStatus();
+    if (mounted) {
+      setState(() {
+        _updateStatus = status;
+        _checkingUpdate = false;
+      });
+    }
+  }
+
+  Future<void> _downloadUpdate() async {
+    final status = _updateStatus;
+    if (status == null || status.apkUrl.isEmpty) return;
+
+    final proceed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            backgroundColor: AppColors.surface,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppRadius.lg)),
+            icon: const Icon(Icons.system_update_rounded,
+                color: AppColors.primary, size: 40),
+            title: Text('Install v${status.latest}?',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontWeight: FontWeight.bold, fontSize: 17)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (status.notes.isNotEmpty) ...[
+                  Text(status.notes,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 12.5, height: 1.45)),
+                  const SizedBox(height: 12),
+                ],
+                const Text(
+                  'The download starts in your browser. Open it when it '
+                  'finishes to install — Android will ask you to allow '
+                  'installs from AttendX the first time.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontSize: 12, color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Not now',
+                    style: TextStyle(color: AppColors.textSecondary)),
+              ),
+              ElevatedButton.icon(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                icon: const Icon(Icons.download_rounded, size: 18),
+                label: const Text('Download'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                ),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!proceed) return;
+
+    setState(() => _downloadingUpdate = true);
+    final started =
+        await UpdateService.instance.downloadUpdate(status.apkUrl);
+
+    if (!mounted) return;
+    setState(() => _downloadingUpdate = false);
+
+    if (!started) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Couldn't start the download. Check your "
+              'connection and try again.'),
+          backgroundColor: AppColors.danger,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  /// Version and update state.
+  ///
+  /// The automatic prompt fires once per session and only when there's
+  /// something to install, so a student who dismissed it — or never saw
+  /// it — had no way to find out what version they were on or whether
+  /// they were behind. This is that way.
+  Widget _buildUpdateCard() {
+    final status = _updateStatus;
+    final available = status?.available ?? false;
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(
+          color: available
+              ? AppColors.primary.withValues(alpha: .35)
+              : AppColors.divider,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                available
+                    ? Icons.system_update_rounded
+                    : Icons.verified_rounded,
+                color: available ? AppColors.primary : AppColors.success,
+                size: 22,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('App version',
+                        style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 2),
+                    Text(
+                      'You have v${AppConfig.appVersion}',
+                      style: const TextStyle(
+                          fontSize: 12, color: AppColors.textSecondary),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          if (status == null && !_checkingUpdate)
+            const Text(
+              'Check whether a newer version has been released.',
+              style:
+                  TextStyle(fontSize: 12, color: AppColors.textSecondary),
+            )
+          else if (_checkingUpdate)
+            const Text('Checking…',
+                style: TextStyle(
+                    fontSize: 12, color: AppColors.textSecondary))
+          else if (status!.error != null)
+            Text(status.error!,
+                style: const TextStyle(
+                    fontSize: 12, color: AppColors.danger))
+          else if (available) ...[
+            Text(
+              'Version ${status.latest} is available.',
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.primary),
+            ),
+            if (status.notes.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.background,
+                  borderRadius: BorderRadius.circular(AppRadius.sm),
+                ),
+                child: Text(status.notes,
+                    style: const TextStyle(fontSize: 12, height: 1.45)),
+              ),
+            ],
+          ] else
+            const Text("You're up to date.",
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.success)),
+
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 46,
+            width: double.infinity,
+            child: available
+                ? ElevatedButton.icon(
+                    onPressed: _downloadingUpdate ? null : _downloadUpdate,
+                    icon: _downloadingUpdate
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.download_rounded, size: 18),
+                    label: Text('Update to v${status!.latest}'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                    ),
+                  )
+                : OutlinedButton.icon(
+                    onPressed: _checkingUpdate ? null : _checkForUpdate,
+                    icon: const Icon(Icons.refresh_rounded, size: 18),
+                    label: Text(status == null
+                        ? 'Check for updates'
+                        : 'Check again'),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -894,6 +1122,8 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                 style:
                     TextStyle(fontSize: 11.5, color: AppColors.textSecondary),
               ),
+              const SizedBox(height: 18),
+              _buildUpdateCard(),
               const SizedBox(height: 18),
               Container(
                 padding: const EdgeInsets.all(20),

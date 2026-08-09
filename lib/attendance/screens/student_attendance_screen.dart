@@ -1,16 +1,22 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../../admin/models/holiday_model.dart';
+import '../../admin/services/holiday_service.dart';
 import '../../core/constants/app_config.dart';
 import '../../core/responsive/responsive.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_radius.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../faculty/services/period_attendance_service.dart';
 import '../../services/attendance_service.dart';
 import '../models/attendance_marker.dart';
 import '../models/attendance_permission_model.dart';
+import '../models/day_summary.dart';
 import '../models/manual_attendance_model.dart';
 import '../services/attendance_permission_service.dart';
 import '../services/manual_attendance_service.dart';
+import 'day_class_mark_sheet.dart';
 
 /// One student's attendance, month by month, with marking.
 ///
@@ -74,6 +80,19 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
   /// the new month lands, the previous one stays on screen.
   Map<int, DayVerdict>? _verdicts;
   String? _verdictKey;
+
+  /// Per-class counts for the visible month, keyed by day-of-month.
+  ///
+  /// Loaded alongside the verdicts rather than folded into them: a
+  /// verdict answers "was this student in college", a summary answers
+  /// "how much of the day did they attend", and the calendar needs both
+  /// — a day can be a whole-day present by the gate and still be 1 of 2
+  /// classes once the registers are in.
+  Map<int, DaySummary> _periodDays = const {};
+
+  /// Bumped after a per-class save so the month reloads even though
+  /// neither the month nor the manual marks changed.
+  int _periodRevision = 0;
 
   /// Days picked out for a single bulk action, by day-of-month.
   ///
@@ -139,7 +158,7 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
         .map((e) => '${e.key}:${e.value.status}')
         .toList()
       ..sort();
-    final key = '$_monthId|${marks.join(',')}';
+    final key = '$_monthId|$_periodRevision|${marks.join(',')}';
 
     if (key == _verdictKey) return;
     _verdictKey = key;
@@ -158,6 +177,23 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
       if (mounted && key == _verdictKey) {
         setState(() => _verdicts = verdicts);
       }
+    });
+
+    // Runs in parallel; the calendar paints on the verdicts and the
+    // fractions fill in a beat later rather than holding the grid back.
+    PeriodAttendanceService.instance
+        .monthSummary(
+      uid: widget.studentUid,
+      studentData: widget.studentData,
+      calendarYear: _visibleMonth.year,
+      month: _visibleMonth.month,
+    )
+        .then((summary) {
+      if (mounted && key == _verdictKey) {
+        setState(() => _periodDays = summary.days);
+      }
+    }).catchError((Object e) {
+      debugPrint('Period summary load failed: $e');
     });
   }
 
@@ -306,6 +342,189 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
     if (go) await _markSelected(status, reasonController.text.trim());
   }
 
+  /// Declares [date] a department-wide holiday.
+  ///
+  /// Distinct from marking a student present: this says the college was
+  /// closed, so the day stops counting for everyone rather than being
+  /// excused for one person.
+  Future<void> _declareHoliday(DateTime date) async {
+    final nameController = TextEditingController();
+    final reasonController = TextEditingController();
+    final dateId = AppConfig.dateId(date);
+
+    final go = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            backgroundColor: AppColors.surface,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppRadius.lg)),
+            title: Text('Holiday on $dateId', style: AppTextStyles.title),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'This closes the day for the whole department — nobody '
+                  'is counted absent for it.',
+                  style: AppTextStyles.caption,
+                ),
+                SizedBox(height: Responsive.h(16)),
+                TextField(
+                  controller: nameController,
+                  autofocus: true,
+                  decoration: InputDecoration(
+                    labelText: 'Occasion *',
+                    hintText: 'Bandh, VC announcement, cyclone…',
+                    hintStyle: AppTextStyles.caption,
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppRadius.sm)),
+                  ),
+                ),
+                SizedBox(height: Responsive.h(12)),
+                TextField(
+                  controller: reasonController,
+                  decoration: InputDecoration(
+                    labelText: 'Reason (shown to students)',
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppRadius.sm)),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Back',
+                    style: TextStyle(color: AppColors.textSecondary)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                ),
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Declare holiday'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!go || nameController.text.trim().isEmpty) return;
+
+    setState(() => _saving = true);
+
+    try {
+      await HolidayService.instance.save(Holiday(
+        date: dateId,
+        name: nameController.text.trim(),
+        reason: reasonController.text.trim(),
+        type: HolidayType.unscheduled,
+      ));
+
+      AttendanceService.instance.clearScheduleCache();
+
+      if (mounted) {
+        // Force the month to recompute — the day is no longer a
+        // working day and every verdict on it has just changed.
+        setState(() {
+          _verdicts = null;
+          _verdictKey = null;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$dateId is now a holiday for everyone.'),
+            backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      _showError("Couldn't save the holiday: $e");
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Turns a stored holiday back into a working day.
+  ///
+  /// The counterpart to declaring one — a date entered by mistake, or a
+  /// closure that was called off, shouldn't need a trip to a separate
+  /// holidays screen to undo.
+  Future<void> _removeHoliday(DateTime date) async {
+    final dateId = AppConfig.dateId(date);
+    final holiday = HolidayService.instance.on(date);
+
+    final go = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            backgroundColor: AppColors.surface,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppRadius.lg)),
+            title: Text('Make $dateId a working day',
+                style: AppTextStyles.title),
+            content: Text(
+              holiday == null
+                  ? 'This reopens the day for the whole department.'
+                  : '"${holiday.name}" is currently closing this day for '
+                      'the whole department. Removing it means classes '
+                      'count again and students can be marked absent.',
+              style: AppTextStyles.caption,
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Back',
+                    style: TextStyle(color: AppColors.textSecondary)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.danger,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                ),
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Remove holiday'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!go) return;
+
+    setState(() => _saving = true);
+
+    try {
+      await HolidayService.instance.delete(dateId);
+
+      // The whole month's verdicts turn on this date being closed, and
+      // the timetable cache was filled while it was.
+      AttendanceService.instance.clearScheduleCache();
+
+      if (mounted) {
+        setState(() {
+          _verdicts = null;
+          _verdictKey = null;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$dateId is a working day again.'),
+            backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      _showError("Couldn't remove the holiday: $e");
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   /// Selects every markable day in the visible month that has a class.
   void _selectAllClassDays() {
     final verdicts = _verdicts;
@@ -378,6 +597,8 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
     final reasonController =
         TextEditingController(text: verdict.manual?.reason ?? '');
 
+    final summary = _periodDays[verdict.date.day];
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -419,6 +640,49 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
                   "${_statusText(verdict.status).toLowerCase()}",
                   style: AppTextStyles.caption,
                 ),
+                if (verdict.isHoliday) ...[
+                  SizedBox(height: Responsive.h(10)),
+                  Container(
+                    width: double.infinity,
+                    padding: Responsive.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE7EBFF),
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.beach_access_rounded,
+                            size: Responsive.sp(17),
+                            color: AppColors.primaryDark),
+                        SizedBox(width: Responsive.w(8)),
+                        Expanded(
+                          child: Text(
+                            'College closed — ${verdict.closureReason}',
+                            style: AppTextStyles.caption.copyWith(
+                              color: AppColors.primaryDark,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                if (summary != null && summary.total > 0) ...[
+                  SizedBox(height: Responsive.h(4)),
+                  Text(
+                    summary.marked == 0
+                        ? "${summary.total} class"
+                            "${summary.total == 1 ? '' : 'es'} scheduled, "
+                            "none registered yet"
+                        : "${summary.fraction} classes attended  •  "
+                            "${summary.breakdown}",
+                    style: AppTextStyles.caption.copyWith(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
                 if (verdict.manual != null) ...[
                   SizedBox(height: Responsive.h(12)),
                   Container(
@@ -507,6 +771,35 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
                     ),
                   ],
                 ),
+                // The in-between case the three buttons above can't
+                // express. Present and Absent are whole-day verdicts;
+                // this is where a day becomes "1 of 2", by naming which
+                // class was attended rather than implying it.
+                if (widget.marker.isAdmin) ...[
+                  SizedBox(height: Responsive.h(10)),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(sheetContext);
+                        _openClassSheet(verdict.date);
+                      },
+                      icon: const Icon(Icons.checklist_rounded, size: 18),
+                      label: const Text('Mark individual classes'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.primary,
+                        padding: Responsive.symmetric(vertical: 13),
+                        side: BorderSide(
+                            color:
+                                AppColors.primary.withValues(alpha: .45)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(AppRadius.sm),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+
                 if (verdict.manual != null) ...[
                   SizedBox(height: Responsive.h(8)),
                   Center(
@@ -522,6 +815,48 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
                     ),
                   ),
                 ],
+
+                // Declaring a closure, rather than marking one student.
+                //
+                // A holiday called at short notice — a bandh, a VC's
+                // announcement, a cyclone — would otherwise have to be
+                // absorbed one student at a time, which is both tedious
+                // and wrong: it isn't an attendance correction, the
+                // college simply wasn't open. Marking the day here
+                // clears it for the whole department at once.
+                if (widget.marker.isAdmin) ...[
+                  SizedBox(height: Responsive.h(4)),
+                  Center(
+                    child: HolidayService.instance.on(verdict.date) != null
+                        // Only a stored holiday can be lifted. Sunday and
+                        // second Saturday are rules, not records — there
+                        // is nothing to delete, so no button is offered.
+                        ? TextButton.icon(
+                            onPressed: () {
+                              Navigator.pop(sheetContext);
+                              _removeHoliday(verdict.date);
+                            },
+                            icon: const Icon(Icons.event_available_rounded,
+                                size: 18),
+                            label: const Text(
+                                'Not a holiday — make it a working day'),
+                            style: TextButton.styleFrom(
+                                foregroundColor: AppColors.danger),
+                          )
+                        : TextButton.icon(
+                            onPressed: () {
+                              Navigator.pop(sheetContext);
+                              _declareHoliday(verdict.date);
+                            },
+                            icon: const Icon(Icons.beach_access_rounded,
+                                size: 18),
+                            label:
+                                const Text('Mark this a holiday for everyone'),
+                            style: TextButton.styleFrom(
+                                foregroundColor: AppColors.primary),
+                          ),
+                  ),
+                ],
                 SizedBox(height: Responsive.h(8)),
               ],
             ),
@@ -529,6 +864,30 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
         ),
       ),
     );
+  }
+
+  /// Opens the day's timetable so the admin can tick class by class.
+  Future<void> _openClassSheet(DateTime date) async {
+    final saved = await DayClassMarkSheet.show(
+      context: context,
+      studentUid: widget.studentUid,
+      studentName: _studentName,
+      studentData: widget.studentData,
+      date: date,
+      markerUid: FirebaseAuth.instance.currentUser?.uid ?? widget.marker.uid,
+      markerName: widget.marker.name,
+      markerRole: widget.marker.role,
+    );
+
+    if (saved && mounted) {
+      // Nothing the verdict cache keys on has changed, so nudge it or
+      // the day would keep showing its old fraction until the month was
+      // switched away and back.
+      setState(() {
+        _periodRevision++;
+        _verdictKey = null;
+      });
+    }
   }
 
   // ------------------------------------------------------- CR permission
@@ -973,6 +1332,7 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
               return _DayCell(
                 day: day,
                 verdict: verdict,
+                summary: _periodDays[day],
                 isToday: isToday,
                 enabled: markable,
                 selected: _selectedDays.contains(day),
@@ -1040,6 +1400,21 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
               ),
             ],
           ),
+          SizedBox(height: Responsive.h(2)),
+          Row(
+            children: [
+              Icon(Icons.info_outline_rounded,
+                  size: Responsive.sp(13), color: AppColors.textSecondary),
+              SizedBox(width: Responsive.w(6)),
+              Expanded(
+                child: Text(
+                  'Whole days only. To mark part of a day, open that day '
+                  'on its own and pick the classes.',
+                  style: AppTextStyles.caption,
+                ),
+              ),
+            ],
+          ),
           SizedBox(height: Responsive.h(10)),
           Row(
             children: [
@@ -1081,12 +1456,14 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
     return Wrap(
       spacing: Responsive.w(14),
       runSpacing: Responsive.h(10),
-      children: const [
-        _LegendDot(color: AppColors.success, label: "Present"),
-        _LegendDot(color: AppColors.danger, label: "Absent"),
-        _LegendDot(color: AppColors.warning, label: "Late"),
-        _LegendDot(color: AppColors.divider, label: "No class"),
-        _LegendDot(
+      children: [
+        const _LegendDot(color: AppColors.success, label: "All classes"),
+        _LegendDot(color: Colors.amber.shade600, label: "Some classes"),
+        const _LegendDot(color: AppColors.danger, label: "Absent"),
+        const _LegendDot(color: AppColors.warning, label: "Late"),
+        const _LegendDot(color: Color(0xFFE7EBFF), label: "Holiday"),
+        const _LegendDot(color: AppColors.divider, label: "No class"),
+        const _LegendDot(
             color: AppColors.primary, label: "Dot = marked by hand"),
       ],
     );
@@ -1224,6 +1601,10 @@ class _PermissionBanner extends StatelessWidget {
 class _DayCell extends StatelessWidget {
   final int day;
   final DayVerdict verdict;
+
+  /// Per-class counts for the day, when any class has been registered.
+  final DaySummary? summary;
+
   final bool isToday;
   final bool enabled;
   final bool selected;
@@ -1233,6 +1614,7 @@ class _DayCell extends StatelessWidget {
   const _DayCell({
     required this.day,
     required this.verdict,
+    required this.summary,
     required this.isToday,
     required this.enabled,
     required this.selected,
@@ -1242,13 +1624,49 @@ class _DayCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (Color fill, Color text) = switch (verdict.status) {
+    final (Color baseFill, Color baseText) = switch (verdict.status) {
       DayStatus.present => (AppColors.success, Colors.white),
       DayStatus.late => (AppColors.warning, Colors.white),
       DayStatus.absent => (AppColors.danger, Colors.white),
       DayStatus.noClass => (AppColors.background, AppColors.textSecondary),
       DayStatus.upcoming => (Colors.transparent, AppColors.textPrimary),
     };
+
+    Color fill = baseFill;
+    Color text = baseText;
+
+    // A closed day is not the same as a day with an empty timetable, and
+    // showing both as blank grey is why holidays were invisible here.
+    // Colour wins over the verdict: if the college was shut, no amount
+    // of missing check-in makes it an absence.
+    if (verdict.isHoliday && verdict.manual == null) {
+      fill = const Color(0xFFE7EBFF);
+      text = AppColors.primaryDark;
+    }
+
+    // Registers beat the gate. A day the scanner called present is
+    // still only half a day if half the classes were missed, and the
+    // colour has to say so or the fraction underneath contradicts it.
+    final marks = (summary != null && summary!.marked > 0) ? summary : null;
+
+    if (marks != null) {
+      switch (marks.status) {
+        case DayAttendance.partial:
+          fill = Colors.amber.shade600;
+          text = Colors.white;
+        case DayAttendance.absent:
+          fill = AppColors.danger;
+          text = Colors.white;
+        case DayAttendance.full:
+          if (verdict.status != DayStatus.late) {
+            fill = AppColors.success;
+            text = Colors.white;
+          }
+        case DayAttendance.noClass:
+        case DayAttendance.notMarked:
+          break;
+      }
+    }
 
     return Material(
       color: Colors.transparent,
@@ -1274,13 +1692,31 @@ class _DayCell extends StatelessWidget {
             child: Stack(
               children: [
                 Center(
-                  child: Text(
-                    "$day",
-                    style: TextStyle(
-                      color: text,
-                      fontWeight: FontWeight.w700,
-                      fontSize: Responsive.sp(12),
-                    ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        "$day",
+                        style: TextStyle(
+                          color: text,
+                          fontWeight: FontWeight.w700,
+                          fontSize: Responsive.sp(12),
+                        ),
+                      ),
+                      if (verdict.isHoliday && marks == null)
+                        Icon(Icons.beach_access_rounded,
+                            size: Responsive.sp(9), color: text)
+                      else if (marks != null)
+                        Text(
+                          marks.fraction,
+                          maxLines: 1,
+                          style: TextStyle(
+                            color: text.withValues(alpha: .85),
+                            fontWeight: FontWeight.w600,
+                            fontSize: Responsive.sp(8),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 if (verdict.isManual)

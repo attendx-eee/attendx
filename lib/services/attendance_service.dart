@@ -43,11 +43,23 @@ class DayVerdict {
   final DayStatus status;
   final ManualAttendance? manual;
 
+  /// Why the college was shut, when it was: "Independence Day", "Second
+  /// Saturday", "Summer vacation". Null on an ordinary working day.
+  ///
+  /// Carried on the verdict rather than looked up again by the calendar
+  /// because a closed day and a day with an empty timetable both come
+  /// back as [DayStatus.noClass], and only one of them has a reason
+  /// worth showing.
+  final String? closureReason;
+
   const DayVerdict({
     required this.date,
     required this.status,
     required this.manual,
+    this.closureReason,
   });
+
+  bool get isHoliday => closureReason != null;
 
   bool get isManual => manual != null;
 
@@ -67,6 +79,11 @@ class AttendanceService {
 
   CollectionReference<Map<String, dynamic>> get _events =>
       _firestore.collection(AppConfig.attendanceEventsCollection);
+
+  /// Drops the cached timetables. Called after the holiday calendar or
+  /// the timetable itself changes, so the next read reflects it instead
+  /// of serving whatever was true when the screen opened.
+  void clearScheduleCache() => _scheduleCache.clear();
 
   /// Today's raw event doc for the student (feeds the dashboard card).
   Future<DocumentSnapshot<Map<String, dynamic>>> todayEvent(String uid) {
@@ -320,6 +337,9 @@ class AttendanceService {
       final dateId = AppConfig.dateId(date);
       final manual = manualByDate[dateId];
 
+      final closure =
+          HolidayService.instance.closureReason(date, year: year);
+
       final periods = await scheduledPeriods(
         department: department,
         year: year,
@@ -337,6 +357,7 @@ class AttendanceService {
           date: date,
           status: periods.isEmpty ? DayStatus.noClass : DayStatus.upcoming,
           manual: null,
+          closureReason: closure,
         );
         continue;
       }
@@ -362,7 +383,12 @@ class AttendanceService {
         status = DayStatus.present;
       }
 
-      result[d] = DayVerdict(date: date, status: status, manual: manual);
+      result[d] = DayVerdict(
+        date: date,
+        status: status,
+        manual: manual,
+        closureReason: closure,
+      );
     }
 
     return result;

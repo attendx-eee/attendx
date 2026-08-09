@@ -15,9 +15,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 class FacultyAccount {
   final String uid;
 
-  /// College-issued staff number. Recorded for the admin's benefit when
-  /// they review the request; nothing keys off it.
-  final String employeeId;
 
   /// Document id in the `faculty` collection this account is tied to.
   ///
@@ -65,7 +62,6 @@ class FacultyAccount {
 
   const FacultyAccount({
     required this.uid,
-    required this.employeeId,
     this.facultyId = '',
     this.status = pending,
     this.decisionNote = '',
@@ -106,7 +102,6 @@ class FacultyAccount {
   factory FacultyAccount.fromMap(String uid, Map<String, dynamic> map) {
     return FacultyAccount(
       uid: uid,
-      employeeId: (map['employeeId'] ?? '').toString(),
       facultyId: (map['facultyId'] ?? '').toString(),
       status: (map['facultyStatus'] ?? pending).toString(),
       decisionNote: (map['decisionNote'] ?? '').toString(),
@@ -125,7 +120,6 @@ class FacultyAccount {
 
   Map<String, dynamic> toMap() => {
         'uid': uid,
-        'employeeId': employeeId,
         'facultyId': facultyId,
         // Named `facultyStatus` rather than `status` because these docs
         // share the `students` collection, where `status` is already

@@ -38,11 +38,12 @@ class FaceEnrollmentScreen extends StatefulWidget {
 
   /// How thorough the scan needs to be.
   ///
-  /// Students default to the full seven-angle sweep, because they're
-  /// matched at a distance by the door camera and by classroom scans.
-  /// Staff pass [ScanProfile.frontalOnly] — they're only ever matched
-  /// close up and on purpose, so a good frontal template is enough and
-  /// a seven-position sweep is friction for no benefit.
+  /// Defaults to [ScanProfile.quick]: a solid front-face set, plus a
+  /// little left and right if the student happens to turn during the
+  /// brief grace period. The full seven-angle sweep is still available
+  /// and produces a better template, but it takes long enough that
+  /// people rush it — and a rushed long scan is worse than an unhurried
+  /// short one.
   final ScanProfile scanProfile;
 
   const FaceEnrollmentScreen({
@@ -50,7 +51,7 @@ class FaceEnrollmentScreen extends StatefulWidget {
     this.mandatory = false,
     this.pendingProfile,
     this.pendingPhoto,
-    this.scanProfile = ScanProfile.full,
+    this.scanProfile = ScanProfile.quick,
   }) : assert(
           !mandatory || pendingProfile != null,
           'pendingProfile is required when mandatory is true',
@@ -101,6 +102,13 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen> {
   /// pre-check and handed to the scorer once the crop exists.
   double _lastOccupancy = 0;
   double _lastCenterOffset = 0;
+
+  /// The rotation last handed to ML Kit.
+  ///
+  /// Needed because it decides whether ML Kit's coordinate space is
+  /// `width x height` or the swap of it, and every geometric check has
+  /// to be measured in that same space to mean anything.
+  InputImageRotation _lastRotation = InputImageRotation.rotation90deg;
 
   /// Decides the single coaching line, with hysteresis so it doesn't
   /// change faster than anyone can read it.
@@ -335,16 +343,14 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
       
       
 
-      // Framing measurements, kept for the scorer once the crop exists.
+      // Occupancy is an area ratio, so swapping width and height makes
+      // no difference to it — unlike the edge and centring checks below,
+      // which are computed in ML Kit's space further down.
       _lastOccupancy = occupancyService.calculateOccupancy(
         face: face,
         frameWidth: cameraImage.width.toDouble(),
         frameHeight: cameraImage.height.toDouble(),
       );
-      _lastCenterOffset = centerResult.distance /
-          (math.sqrt(previewSize.width * previewSize.width +
-                  previewSize.height * previewSize.height) /
-              2);
 
       if (mounted) {
         setState(() {
@@ -359,22 +365,42 @@ Future<CalibrationFrame?> _captureSingleFrame() async {
       // blocking stops the frame before the expensive crop-and-embed
       // step: there is no point spending 100ms on a face that's half
       // out of shot.
+      // The face box and the frame it lives in, both in ML Kit's own
+      // upright space.
+      //
+      // Two wrong answers were tried before this one. Comparing the raw
+      // box against `cameraImage.width/height` fails because the buffer
+      // is landscape (1280x720) while ML Kit reports upright (720x1280),
+      // so every face looked clipped by the bottom edge. Using the
+      // transformed rect and the preview size fails too — the transform
+      // mirrors the front camera against the wrong width and returns a
+      // negative left, so every face looked clipped by the *left* edge.
+      //
+      // The raw box is correct as long as it's measured against the
+      // dimensions ML Kit actually used, which are swapped for the 90
+      // and 270 degree rotations.
+      final rotatedFrame = (_lastRotation == InputImageRotation.rotation90deg ||
+              _lastRotation == InputImageRotation.rotation270deg)
+          ? Size(cameraImage.height.toDouble(), cameraImage.width.toDouble())
+          : Size(cameraImage.width.toDouble(), cameraImage.height.toDouble());
+
+      // Centering measured in the same space, for the same reason.
+      final faceCentre = face.boundingBox.center;
+      final frameCentre =
+          Offset(rotatedFrame.width / 2, rotatedFrame.height / 2);
+      final halfDiagonal = math.sqrt(
+              rotatedFrame.width * rotatedFrame.width +
+                  rotatedFrame.height * rotatedFrame.height) /
+          2;
+      _lastCenterOffset =
+          halfDiagonal == 0 ? 0 : (faceCentre - frameCentre).distance / halfDiagonal;
+
       _issue = _coach.update(ScanCoach.diagnose(
         faceCount: 1,
-        // The transformed rect and the preview size, NOT the raw
-        // bounding box and the camera buffer.
-        //
-        // ML Kit reports the face in an upright coordinate space, while
-        // `cameraImage.width/height` is the sensor buffer — landscape on
-        // most Android phones. Comparing a portrait box against
-        // landscape dimensions made every face look clipped by the
-        // bottom edge, so the scan permanently complained that only part
-        // of the face was visible while showing a perfectly framed one.
-        faceBox: transformedFaceRect,
-        frame: previewSize,
+        faceBox: face.boundingBox,
+        frame: rotatedFrame,
         brightness: null, // measured on the crop, fed in below
         occupancy: _lastOccupancy,
-        centerOffset: _lastCenterOffset,
         roll: face.headEulerAngleZ,
         minOccupancy: QualityThresholds.minFaceOccupancy,
         maxOccupancy: QualityThresholds.maxFaceOccupancy,
@@ -1163,6 +1189,8 @@ Future<void> _uploadEmbeddingsToFirebase() async {
         rotation = InputImageRotationValue.fromRawValue(compensated) ??
             InputImageRotation.rotation0deg;
       }
+
+      _lastRotation = rotation;
 
       final format = InputImageFormatValue.fromRawValue(image.format.raw) ?? InputImageFormat.nv21;
 

@@ -134,6 +134,31 @@ class _RequestCardState extends State<_RequestCard> {
   String? _facultyId;
   bool _busy = false;
 
+  /// Editable copies of what the applicant typed.
+  ///
+  /// People fill sign-up forms carelessly — a name in lower case, the
+  /// wrong designation, blank initials. Rejecting them over it means a
+  /// round trip and a second attempt; letting the admin fix it here
+  /// costs one field and gets the record right first time.
+  late final TextEditingController _name =
+      TextEditingController(text: widget.account.name);
+  late final TextEditingController _shortName =
+      TextEditingController(text: widget.account.shortName);
+
+  late String _designation =
+      FacultyAccount.designations.contains(widget.account.designation)
+          ? widget.account.designation
+          : FacultyAccount.designations[2];
+
+  bool _editing = false;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _shortName.dispose();
+    super.dispose();
+  }
+
   Future<void> _approve() async {
     if (_facultyId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -172,12 +197,19 @@ class _RequestCardState extends State<_RequestCard> {
         return;
       }
 
+      // Any corrections the admin made are saved with the approval, so
+      // the record that goes live is the corrected one.
       await FirebaseFirestore.instance
           .collection('students')
           .doc(widget.account.uid)
           .update({
         'facultyStatus': FacultyAccount.approved,
         'facultyId': _facultyId,
+        'name': _name.text.trim().isEmpty
+            ? widget.account.name
+            : _name.text.trim(),
+        'shortName': _shortName.text.trim().toUpperCase(),
+        'designation': _designation,
         'facultyDecidedAt': FieldValue.serverTimestamp(),
       });
 
@@ -343,7 +375,6 @@ class _RequestCardState extends State<_RequestCard> {
             spacing: Responsive.w(8),
             runSpacing: Responsive.h(8),
             children: [
-              _Tag(icon: Icons.pin_outlined, text: 'ID ${a.employeeId}'),
               _Tag(icon: Icons.mail_outline_rounded, text: a.email),
               _Tag(icon: Icons.phone_outlined, text: a.mobile),
               if (a.experienceYears > 0)
@@ -352,6 +383,63 @@ class _RequestCardState extends State<_RequestCard> {
                     text: '${a.experienceYears} yrs'),
             ],
           ),
+
+          SizedBox(height: Responsive.h(6)),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _busy
+                  ? null
+                  : () => setState(() => _editing = !_editing),
+              icon: Icon(_editing ? Icons.close_rounded : Icons.edit_outlined,
+                  size: 16),
+              label: Text(_editing ? 'Done editing' : 'Correct details'),
+              style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact),
+            ),
+          ),
+
+          if (_editing) ...[
+            SizedBox(height: Responsive.h(8)),
+            TextField(
+              controller: _name,
+              textCapitalization: TextCapitalization.words,
+              decoration: InputDecoration(
+                labelText: 'Full name',
+                isDense: true,
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(AppRadius.sm)),
+              ),
+            ),
+            SizedBox(height: Responsive.h(10)),
+            TextField(
+              controller: _shortName,
+              textCapitalization: TextCapitalization.characters,
+              decoration: InputDecoration(
+                labelText: 'Initials on the timetable',
+                isDense: true,
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(AppRadius.sm)),
+              ),
+            ),
+            SizedBox(height: Responsive.h(10)),
+            DropdownButtonFormField<String>(
+              initialValue: _designation,
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: 'Designation',
+                isDense: true,
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(AppRadius.sm)),
+              ),
+              items: FacultyAccount.designations
+                  .map((d) => DropdownMenuItem(value: d, child: Text(d)))
+                  .toList(),
+              onChanged: (v) => setState(() => _designation = v!),
+            ),
+          ],
+
           SizedBox(height: Responsive.h(14)),
 
           // The link that makes their timetable work.

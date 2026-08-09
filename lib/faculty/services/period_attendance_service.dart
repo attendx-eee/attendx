@@ -1,5 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../admin/models/period_model.dart';
+import '../../admin/services/holiday_service.dart';
+import '../../attendance/models/day_summary.dart';
+import '../../services/attendance_service.dart';
 import '../../core/constants/app_config.dart';
 import '../../notifications/services/notification_service.dart';
 import '../models/period_attendance.dart';
@@ -118,6 +122,26 @@ class PeriodAttendanceService {
     });
   }
 
+  /// One date's records for a year, keyed by period number.
+  ///
+  /// The one-shot sibling of [watchDay] — used where a screen needs the
+  /// day once and then edits it, and a live stream would fight the
+  /// local edits for control of the checkboxes.
+  Future<Map<int, PeriodAttendance>> dayForYear({
+    required String department,
+    required int year,
+    required String date,
+  }) async {
+    final snap = await _collection
+        .where('department', isEqualTo: department)
+        .where('year', isEqualTo: year)
+        .where('date', isEqualTo: date)
+        .get();
+
+    final records = snap.docs.map(PeriodAttendance.fromFirestore);
+    return {for (final r in records) r.periodNo: r};
+  }
+
   /// Every period a year had in one month.
   ///
   /// Queried by year and month rather than by student: Firestore can't
@@ -144,6 +168,219 @@ class PeriodAttendanceService {
     return list;
   }
 
+  /// Marks one student class by class on one day.
+  ///
+  /// This is the admin's partial-attendance path: the day's timetable is
+  /// laid out, the admin ticks the classes the student actually attended,
+  /// and every other class that day is recorded as an absence for them.
+  /// Whole-day present and whole-day absent stay on the day-level manual
+  /// override — this exists for the case those two can't express.
+  ///
+  /// Only this student's entry is touched. Where a faculty member has
+  /// already scanned the period, their record is amended in place; where
+  /// nobody has marked it, a new record is created **scoped to this
+  /// student**, so it doesn't quietly declare the rest of the year absent
+  /// for a class that was never registered.
+  ///
+  /// Returns the number of periods written.
+  Future<int> markStudentDay({
+    required String uid,
+    required Map<String, dynamic> studentData,
+    required DateTime date,
+    required List<PeriodModel> periods,
+    required Set<int> presentPeriodNos,
+    required String markerUid,
+    required String markerName,
+    required String markerRole,
+  }) async {
+    final department = AppConfig.departmentOf(studentData);
+    final year = AppConfig.yearOf(studentData);
+    final dateId = AppConfig.dateId(date);
+
+    // Deliberately not re-filtered by batch. The caller passes exactly
+    // the classes it put in front of the admin, and filtering again here
+    // would silently drop rows they ticked — the worst kind of bug,
+    // because the screen would report a save that never happened.
+    final relevant =
+        periods.where((p) => !p.isFree && p.subject.isNotEmpty).toList();
+
+    if (relevant.isEmpty) return 0;
+
+    final refs = {
+      for (final p in relevant)
+        p.periodNo: _collection.doc(PeriodAttendance.buildId(
+          department: department,
+          year: year,
+          date: dateId,
+          periodNo: p.periodNo,
+        )),
+    };
+
+    // Read before writing: arrayUnion alone would leave presentCount
+    // stale, and knowing whether the document already exists is what
+    // decides between amending a class register and creating a
+    // single-student one.
+    final existing = await Future.wait(
+      relevant.map((p) => refs[p.periodNo]!.get()),
+    );
+
+    final batch = _firestore.batch();
+
+    for (var i = 0; i < relevant.length; i++) {
+      final period = relevant[i];
+      final doc = existing[i];
+      final present = presentPeriodNos.contains(period.periodNo);
+
+      if (doc.exists) {
+        final current = PeriodAttendance.fromFirestore(doc);
+
+        final presentUids = current.presentUids.toSet();
+        if (present) {
+          presentUids.add(uid);
+        } else {
+          presentUids.remove(uid);
+        }
+
+        // A whole-class record stays whole-class. A record that was
+        // already scoped to named students grows to include this one,
+        // since it now speaks for them too.
+        final scope = current.scopeUids.isEmpty
+            ? const <String>[]
+            : ({...current.scopeUids, uid}.toList());
+
+        batch.set(
+          refs[period.periodNo]!,
+          {
+            'presentUids': presentUids.toList(),
+            'presentCount': presentUids.length,
+            'scopeUids': scope,
+            'lastEditedBy': markerUid,
+            'lastEditedByName': '$markerName (${markerRole.toUpperCase()})',
+            'lastEditedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      } else {
+        batch.set(
+          refs[period.periodNo]!,
+          PeriodAttendance(
+            id: '',
+            department: department,
+            year: year,
+            academicYear: AppConfig.academicYear,
+            date: dateId,
+            periodNo: period.periodNo,
+            startTime: period.startTime,
+            endTime: period.endTime,
+            subject: period.subject,
+            batch: period.batch,
+            facultyId: period.facultyId,
+            facultyName: period.facultyName,
+            presentUids: present ? [uid] : const [],
+            recognisedUids: const [],
+            scopeUids: [uid],
+            method: PeriodAttendanceMethod.manual,
+            markedBy: markerUid,
+            markedByName: '$markerName (${markerRole.toUpperCase()})',
+          ).toMap(),
+        );
+      }
+    }
+
+    await batch.commit();
+
+    final attended = presentPeriodNos
+        .where((n) => relevant.any((p) => p.periodNo == n))
+        .length;
+
+    await NotificationService.instance.createNotification(
+      studentUid: uid,
+      title: 'Attendance updated for $dateId',
+      body: attended == relevant.length
+          ? 'You have been marked present for all ${relevant.length} '
+              'classes on $dateId by $markerName.'
+          : attended == 0
+              ? 'You have been marked absent for all ${relevant.length} '
+                  'classes on $dateId by $markerName.'
+              : 'You have been marked present for $attended of '
+                  '${relevant.length} classes on $dateId by $markerName. '
+                  'If this is wrong, raise it with the department.',
+      category: 'attendance',
+      priority: 'high',
+      action: 'period_attendance',
+      data: {'date': dateId},
+    );
+
+    return relevant.length;
+  }
+
+  /// A student's month, day by day, counted from period records.
+  ///
+  /// This is what makes a day worth "1 of 2" rather than a flat present
+  /// or absent. The timetable says what was scheduled; the period
+  /// records say what was attended; the difference is the fraction.
+  ///
+  /// Returns {day-of-month: summary} plus the rolled-up totals, since
+  /// every caller that wants one wants the other.
+  Future<({Map<int, DaySummary> days, AttendanceTotals totals})> monthSummary({
+    required String uid,
+    required Map<String, dynamic> studentData,
+    required int calendarYear,
+    required int month,
+  }) async {
+    final department = AppConfig.departmentOf(studentData);
+    final year = AppConfig.yearOf(studentData);
+    final batch = (studentData['batch'] ?? '').toString();
+
+    final monthId =
+        '$calendarYear-${month.toString().padLeft(2, '0')}';
+
+    // One query for the whole month, then grouped by date — far cheaper
+    // than a read per day.
+    final records = await monthForYear(
+      department: department,
+      year: year,
+      month: monthId,
+    );
+
+    final byDate = <String, Map<int, PeriodAttendance>>{};
+    for (final r in records) {
+      byDate.putIfAbsent(r.date, () => {})[r.periodNo] = r;
+    }
+
+    await HolidayService.instance.all();
+
+    final daysInMonth = DateTime(calendarYear, month + 1, 0).day;
+    final today = DateTime.now();
+    final days = <int, DaySummary>{};
+    final totals = AttendanceTotals();
+
+    for (var d = 1; d <= daysInMonth; d++) {
+      final date = DateTime(calendarYear, month, d);
+      if (date.isAfter(DateTime(today.year, today.month, today.day))) break;
+
+      final periods = await AttendanceService.instance.scheduledPeriods(
+        department: department,
+        year: year,
+        weekday: AppConfig.dayName(date),
+        on: date,
+      );
+
+      final summary = DaySummaryBuilder.build(
+        date: date,
+        uid: uid,
+        periods: periods,
+        records: byDate[AppConfig.dateId(date)] ?? const {},
+        studentBatch: batch,
+      );
+
+      days[d] = summary;
+      totals.add(summary);
+    }
+
+    return (days: days, totals: totals);
+  }
+
   /// Subject-wise totals for one student over a month.
   ///
   /// Returns {subject: (attended, total)} — the shape a "you are at 68%
@@ -162,6 +399,8 @@ class PeriodAttendanceService {
     final tally = <String, ({int attended, int total})>{};
 
     for (final p in periods) {
+      if (!p.covers(uid)) continue;
+
       // A lab period marked for batch B says nothing about a student in
       // batch A — they weren't expected to be there.
       if (p.batch.isNotEmpty) {

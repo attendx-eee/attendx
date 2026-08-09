@@ -2,7 +2,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import '../admin/master_data/master_home.dart';
+// MasterHome is deliberately not imported. Admin is a web-only role
+// now, so nothing in the phone build should be able to reach the
+// console — and not importing it keeps the whole admin tree out of the
+// student APK rather than merely hiding the button.
 import '../faculty/models/faculty_account.dart';
 import '../faculty/screens/faculty_home.dart';
 import '../services/firestore_service.dart';
@@ -66,10 +69,11 @@ class RoleRouter extends StatelessWidget {
         }
 
         if (isAdminRole(snapshot.data!)) {
-          // MasterHome can't reach the login screen itself without
-          // pulling the student tree in behind it, so the mobile app
-          // hands it the way back.
-          return MasterHome(onLogout: signOutToLogin);
+          // The console is a desktop tool, run from the department PC.
+          // An admin account signing in here gets pointed at it rather
+          // than a phone-sized copy of it — one place to administer
+          // from, and one door to secure.
+          return const _AdminOnWeb();
         }
 
         if (snapshot.data == 'faculty') {
@@ -80,6 +84,60 @@ class RoleRouter extends StatelessWidget {
 
         return DashboardScreen(overrideUid: overrideUid);
       },
+    );
+  }
+}
+
+/// Shown when an admin account signs in on a phone.
+class _AdminOnWeb extends StatelessWidget {
+  const _AdminOnWeb();
+
+  static const String consoleUrl =
+      'https://ganga2006.github.io/attendx/admin/';
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.desktop_windows_rounded,
+                  size: 46, color: Colors.blueGrey),
+              const SizedBox(height: 18),
+              const Text(
+                'Admin runs on the web',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Open the console on your computer to manage attendance, '
+                'timetables and approvals.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: Colors.black54),
+              ),
+              const SizedBox(height: 14),
+              const SelectableText(
+                consoleUrl,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.blue),
+              ),
+              const SizedBox(height: 26),
+              OutlinedButton.icon(
+                onPressed: () => signOutToLogin(context),
+                icon: const Icon(Icons.logout_rounded, size: 18),
+                label: const Text('Sign out'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

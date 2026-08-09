@@ -13,7 +13,6 @@ enum CoachIssue {
   tooBright,
   tooFar,
   tooClose,
-  offCentre,
   headTilted,
   tooBlurry,
 
@@ -54,15 +53,6 @@ class ScanCoach {
   /// scan feel unresponsive rather than calm.
   static const Duration _confirmAfter = Duration(milliseconds: 500);
 
-  /// How close to the frame edge counts as clipped, as a fraction of the
-  /// frame.
-  ///
-  /// Deliberately small. This fires only when the face box genuinely
-  /// reaches the boundary — a generous margin turns "sitting near the
-  /// top of the preview" into "your face is cut off", which is both
-  /// wrong and impossible to act on when the face is plainly whole.
-  static const double _edgeMargin = 0.01;
-
   CoachIssue _current = CoachIssue.noFace;
 
   CoachIssue _candidate = CoachIssue.noFace;
@@ -100,7 +90,6 @@ class ScanCoach {
     Size? frame,
     double? brightness,
     double? occupancy,
-    double? centerOffset,
     double? roll,
     double? sharpness,
     double? sharpnessFloor,
@@ -113,19 +102,22 @@ class ScanCoach {
     if (faceCount == 0) return CoachIssue.noFace;
     if (faceCount > 1) return CoachIssue.multipleFaces;
 
-    // Clipped by the frame edge. Checked before anything else that
-    // depends on the face box, because measurements taken from half a
-    // face are wrong rather than merely bad — a chin cut off by the
-    // bottom edge reads as a small, badly-centred face, and the advice
-    // that follows would send the student the wrong way.
+    // Clipped by the frame edge.
+    //
+    // Only flagged when the box has actually run past the boundary, not
+    // when it merely approaches one. An inset margin sounds safer and
+    // isn't: it turns "sitting near the top of the preview" into "your
+    // face is cut off", which is wrong, unactionable, and was blocking
+    // perfectly good scans on real handsets.
+    //
+    // ML Kit clamps its boxes to the frame, so a genuinely cut-off face
+    // produces one that reaches or crosses the edge exactly. That's a
+    // reliable signal on every device; a percentage inset is not.
     if (faceBox != null && frame != null && frame.width > 0) {
-      final mx = frame.width * _edgeMargin;
-      final my = frame.height * _edgeMargin;
-
-      final clipped = faceBox.left < mx ||
-          faceBox.top < my ||
-          faceBox.right > frame.width - mx ||
-          faceBox.bottom > frame.height - my;
+      final clipped = faceBox.left <= 0 ||
+          faceBox.top <= 0 ||
+          faceBox.right >= frame.width ||
+          faceBox.bottom >= frame.height;
 
       if (clipped) return CoachIssue.partiallyOutOfFrame;
     }
@@ -142,9 +134,15 @@ class ScanCoach {
       if (occupancy > maxOccupancy) return CoachIssue.tooClose;
     }
 
-    if (centerOffset != null && centerOffset > 0.45) {
-      return CoachIssue.offCentre;
-    }
+    // Centring is deliberately NOT a blocking check any more.
+    //
+    // It was the least reliable thing here: the offset depended on a
+    // coordinate transform that differs by camera, mirroring and
+    // handset, and it fired on faces that were plainly well placed. It
+    // also earns nothing — occupancy already guarantees the face is a
+    // sensible size, and ML Kit cannot detect a face that isn't
+    // substantially in shot. The guide outline remains as a hint, which
+    // is all it should ever have been.
 
     if (roll != null && roll.abs() > maxRoll) return CoachIssue.headTilted;
 
@@ -174,7 +172,6 @@ class ScanCoach {
           'Too bright — move out of direct light or glare',
         CoachIssue.tooFar => 'Move a little closer',
         CoachIssue.tooClose => 'Move the phone back a little',
-        CoachIssue.offCentre => 'Centre your face in the circle',
         CoachIssue.headTilted => 'Keep your head upright',
         CoachIssue.tooBlurry => 'Hold the phone steady',
         CoachIssue.none => '',
@@ -192,7 +189,6 @@ class ScanCoach {
           'Even, indirect light works best',
         CoachIssue.tooFar || CoachIssue.tooClose =>
           'Your face should fill most of the circle',
-        CoachIssue.offCentre => 'Line your nose up with the middle',
         CoachIssue.headTilted => 'Level, not tilted to one side',
         CoachIssue.tooBlurry => 'Rest your elbow on something if you can',
         CoachIssue.none => '',

@@ -8,9 +8,13 @@ enum ScanPhase {
   /// Face is framed; hold still while the centre bin fills.
   holdStill,
 
-  /// Mid-sweep.
-  turnLeft,
-  turnRight,
+  /// Mid-sweep. Deliberately not "left" and "right": which way a given
+  /// yaw sign corresponds to depends on the camera and whether the
+  /// preview is mirrored, so the scan asks for a side rather than
+  /// naming one it can't be sure of.
+  turnOneWay,
+  turnOtherWay,
+
   tiltUp,
   tiltDown,
 
@@ -71,42 +75,48 @@ class ScanGuide {
   }) {
     if (!faceDetected) return ScanPhase.findFace;
 
-    if (harvester.hasRequiredCoverage) {
-      // Required bins are done. Give the optional extremes a short
-      // chance to fill — they widen the template — but never block on
-      // them, so a student who can't turn far still finishes.
-      final outstanding = harvester.outstandingBins;
-      if (outstanding.isEmpty) return ScanPhase.complete;
-      return _phaseForBin(outstanding.first) ?? ScanPhase.finishing;
-    }
-
-    // Centre first: it's the view most logins will present, and it's the
+    // Centre first: it's the view most logins will present, and the
     // easiest to get right while the student is still settling.
     if (!harvester.isBinComplete(ScanBin.centre)) return ScanPhase.holdStill;
 
-    final outstanding = harvester.outstandingBins;
-    if (outstanding.isEmpty) return ScanPhase.complete;
+    if (harvester.hasRequiredCoverage) {
+      // Required coverage is in. Anything else is a bonus collected
+      // during the short grace period before the scan closes itself —
+      // so the instruction invites it rather than demanding it, and the
+      // student is never left waiting on an angle nobody needs.
+      final wantsMore = harvester.targets.keys
+          .any((bin) => !harvester.isBinComplete(bin));
 
-    return _phaseForBin(outstanding.first) ?? ScanPhase.finishing;
+      if (!wantsMore) return ScanPhase.complete;
+
+      if (!harvester.isBinComplete(ScanBin.up) &&
+          harvester.targets.containsKey(ScanBin.up)) {
+        return ScanPhase.tiltUp;
+      }
+
+      return ScanPhase.finishing;
+    }
+
+    // Then the two sides, counted rather than named.
+    //
+    // The old code asked for whichever required bin came first in the
+    // set — always `left`. If this camera's yaw sign runs the other way,
+    // turning left filled `right`, `left` never completed, and the
+    // instruction never advanced. Asking for "one side" and then "the
+    // other" is correct whichever way the sign runs.
+    if (!harvester.hasOneSide) return ScanPhase.turnOneWay;
+    return ScanPhase.turnOtherWay;
   }
-
-  static ScanPhase? _phaseForBin(ScanBin bin) => switch (bin) {
-        ScanBin.centre => ScanPhase.holdStill,
-        ScanBin.left || ScanBin.farLeft => ScanPhase.turnLeft,
-        ScanBin.right || ScanBin.farRight => ScanPhase.turnRight,
-        ScanBin.up => ScanPhase.tiltUp,
-        ScanBin.down => ScanPhase.tiltDown,
-      };
 
   /// The headline instruction.
   static String title(ScanPhase phase) => switch (phase) {
-        ScanPhase.findFace => 'Position your face in the circle',
+        ScanPhase.findFace => 'Position your face in the frame',
         ScanPhase.holdStill => 'Hold still',
-        ScanPhase.turnLeft => 'Slowly turn your head left',
-        ScanPhase.turnRight => 'Slowly turn your head right',
+        ScanPhase.turnOneWay => 'Slowly turn your head to one side',
+        ScanPhase.turnOtherWay => 'Now slowly turn to the other side',
         ScanPhase.tiltUp => 'Slowly tilt your head up',
         ScanPhase.tiltDown => 'Slowly tilt your head down',
-        ScanPhase.finishing => 'Almost there — keep moving slowly',
+        ScanPhase.finishing => 'Almost done — turn your head a little',
         ScanPhase.complete => 'Scan complete',
       };
 
@@ -115,11 +125,11 @@ class ScanGuide {
         ScanPhase.findFace =>
           'Hold the phone at eye level, arm\'s length away',
         ScanPhase.holdStill => 'Capturing your face',
-        ScanPhase.turnLeft ||
-        ScanPhase.turnRight =>
+        ScanPhase.turnOneWay ||
+        ScanPhase.turnOtherWay =>
           'Keep your eyes on the screen as you turn',
         ScanPhase.tiltUp || ScanPhase.tiltDown => 'Nice and slow',
-        ScanPhase.finishing => 'Just rounding out the scan',
+        ScanPhase.finishing => 'Optional — this finishes on its own',
         ScanPhase.complete => 'Saving your face profile',
       };
 

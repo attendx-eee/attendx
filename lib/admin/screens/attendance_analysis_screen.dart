@@ -34,6 +34,18 @@ enum AnalysisSort {
         AnalysisSort.percentAsc => 'Lowest % first',
         AnalysisSort.percentDesc => 'Highest % first',
       };
+
+  /// ASCII-only version for the PDF.
+  ///
+  /// The built-in PDF fonts are Latin-1, so an arrow has no glyph and
+  /// renders as a hollow box. Same reason the header avoids em dashes
+  /// and bullets.
+  String get pdfLabel => switch (this) {
+        AnalysisSort.regNoAsc => 'Reg no (ascending)',
+        AnalysisSort.regNoDesc => 'Reg no (descending)',
+        AnalysisSort.percentAsc => 'Lowest % first',
+        AnalysisSort.percentDesc => 'Highest % first',
+      };
 }
 
 /// One student's month.
@@ -276,21 +288,28 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
           header: (context) => pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
+              // ASCII only in the PDF.
+              //
+              // The built-in PDF fonts are Latin-1: an em dash, a
+              // bullet, or a curly quote has no glyph and renders as a
+              // hollow box. Embedding a Unicode font would fix it too,
+              // at the cost of a few hundred KB in the APK for
+              // punctuation nobody needs on a report.
               pw.Text(
-                'Attendance Analysis — Year $_year, $_monthLabel',
+                'Attendance Analysis - Year $_year, $_monthLabel',
                 style:
                     pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
               ),
               pw.SizedBox(height: 4),
               pw.Text(
-                '${AppConfig.department} • ${AppConfig.academicYear} • '
-                'sorted by ${_sort.label}',
+                '${AppConfig.department} | ${AppConfig.academicYear} | '
+                'sorted by ${_sort.pdfLabel}',
                 style:
                     const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
               ),
               pw.SizedBox(height: 2),
               pw.Text(
-                'Class average ${_classAverage.toStringAsFixed(1)}% • '
+                'Class average ${_classAverage.toStringAsFixed(1)}% | '
                 '$_shortCount of ${rows.length} below 75%',
                 style:
                     const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),

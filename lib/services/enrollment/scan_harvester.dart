@@ -101,11 +101,25 @@ enum ScanFeedback {
 /// seven positions for a convenience feature is a good way to have them
 /// not bother.
 enum ScanProfile {
-  /// Seven angle bins, ~15 frames. Used for students.
+  /// Seven angle bins, ~15 frames. The most robust template, and the
+  /// slowest to collect. Not used by default any more — see [quick].
   full,
+
+  /// Front face required; a little left and right taken if the student
+  /// happens to turn, and not waited for if they don't.
+  ///
+  /// This is the default for students, and it's a deliberate trade. The
+  /// full sweep produces a better template, but enrollment that demands
+  /// seven head positions feels like an ordeal, and an ordeal at
+  /// registration is one people rush, fumble, or abandon — which
+  /// produces *worse* templates than a short scan done properly. A
+  /// solid frontal set plus whatever sides come for free is the better
+  /// bargain in practice.
+  quick,
 
   /// Frontal only, but more of it — six good frames instead of four,
   /// since there's no angular spread to lend the template variety.
+  /// Used for staff, who are only ever matched close up and on purpose.
   frontalOnly,
 }
 
@@ -129,8 +143,18 @@ class ScanHarvester {
 
   static const Map<ScanBin, int> _frontalTargets = {ScanBin.centre: 6};
 
-  Map<ScanBin, int> get targets =>
-      profile == ScanProfile.full ? _fullTargets : _frontalTargets;
+  /// Front-heavy, with room for sides that arrive on their own.
+  static const Map<ScanBin, int> _quickTargets = {
+    ScanBin.centre: 5,
+    ScanBin.left: 2,
+    ScanBin.right: 2,
+  };
+
+  Map<ScanBin, int> get targets => switch (profile) {
+        ScanProfile.full => _fullTargets,
+        ScanProfile.quick => _quickTargets,
+        ScanProfile.frontalOnly => _frontalTargets,
+      };
 
   /// Bins the scan cannot finish without. The extremes are desirable but
   /// optional: some people simply won't turn far enough, and refusing to
@@ -141,8 +165,43 @@ class ScanHarvester {
     ScanBin.right,
   };
 
+  /// Only [ScanProfile.full] insists on the sides. Quick and frontal
+  /// scans finish on the front face alone, so nobody is held up by an
+  /// angle they can't or won't reach.
   Set<ScanBin> get requiredBins =>
       profile == ScanProfile.full ? _fullRequired : const {ScanBin.centre};
+
+  // -------------------------------------------------------------------
+  // Side-agnostic view of the two profile bins.
+  //
+  // `left` and `right` are named after the sign of the yaw, and that
+  // sign's relationship to the direction a person feels themselves
+  // turning depends on the camera, the mirroring of the preview, and the
+  // handset. Guiding by name meant the app could ask for "left" while
+  // the frames landed in `right` — so `left` never filled and it asked
+  // forever, which is exactly what happened.
+  //
+  // Nothing downstream cares which side is which: the matcher iterates
+  // whatever poses it finds. So the scan asks for "one side" and then
+  // "the other side", and lets the angles fall where they fall.
+  // -------------------------------------------------------------------
+
+  bool get _sideAComplete => isBinComplete(ScanBin.left);
+  bool get _sideBComplete => isBinComplete(ScanBin.right);
+
+  /// True once either side has its quota.
+  bool get hasOneSide => _sideAComplete || _sideBComplete;
+
+  /// True once both do.
+  bool get hasBothSides => _sideAComplete && _sideBComplete;
+
+  /// How far through the two-sided part of the sweep, 0-1. Used to keep
+  /// the progress ring moving while the student turns.
+  double get sideProgress {
+    final a = progressFor(ScanBin.left);
+    final b = progressFor(ScanBin.right);
+    return ((a + b) / 2).clamp(0.0, 1.0);
+  }
 
   /// Above this cosine similarity a frame is the same frame again — the
   /// head barely moved between captures. Keeping both would weight the

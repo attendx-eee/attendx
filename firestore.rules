@@ -49,6 +49,38 @@ service cloud.firestore {
       return signedIn() && myRole() is string && myRole().lower() == 'faculty';
     }
 
+    // The caller's own study year, straight from their student doc.
+    // Used to pin a CR to their own year — they can't file attendance
+    // for a class they aren't in.
+    function myYear() {
+      return exists(/databases/$(database)/documents/students/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/students/$(request.auth.uid)).data.get('year', 0)
+        : 0;
+    }
+
+    // ---------- clock helpers ----------
+    // request.time is UTC; the college runs on IST. Comparing a UTC
+    // date against a date string the phone wrote in IST would reject
+    // every mark made before 05:30 and accept the wrong day after
+    // 18:30, so the offset is applied before anything is compared.
+    function istNow() {
+      return request.time + duration.value(330, 'm');
+    }
+
+    function pad2(n) {
+      return n < 10 ? '0' + string(n) : string(n);
+    }
+
+    function istDateId() {
+      return string(istNow().year) + '-' + pad2(istNow().month)
+        + '-' + pad2(istNow().day);
+    }
+
+    function istDayName() {
+      return ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday',
+              'Saturday', 'Sunday'][istNow().dayOfWeek() - 1];
+    }
+
     // Faculty sign-ups land as 'pending' and can't mark anything until an
     // admin approves them and links them to a timetable record. Enforced
     // here, not just in the UI, so an unapproved account can't write to
@@ -188,12 +220,49 @@ service cloud.firestore {
     // admin-only: a wrong period should be corrected by re-marking it
     // (which overwrites, and leaves an audit trail), never by making the
     // record disappear.
+    //
+    // A CR may write labs, and only labs, and only for their own year,
+    // and only on the day itself.
+    //
+    // The "it's a lab" claim is not taken from the document being
+    // written — a CR could simply set that field on a theory period and
+    // mark themselves present in every lecture. It's read back from the
+    // timetable, at the slot for today's weekday, which is the same
+    // record the student calendar counts against. Same reason the
+    // weekday comes from the server clock rather than the payload:
+    // otherwise a CR could point a Monday theory period at Friday's lab
+    // slot and have it validate.
+    //
+    // Residual: `academicYear` is taken from the payload, so a CR could
+    // in principle cite a past year whose timetable had a lab in that
+    // slot. It would still be visible as a lab marked by a named CR, and
+    // an admin can delete it.
+    function crMayMarkLab() {
+      return isCr()
+        && request.resource.data.markedBy == request.auth.uid
+        // Compared as strings: some student docs carry `year` as an int,
+        // older ones as a string, and a type mismatch here would lock a
+        // legitimate CR out with no visible reason.
+        && string(request.resource.data.year) == string(myYear())
+        && request.resource.data.date == istDateId()
+        && get(/databases/$(database)/documents/timetables/$(request.resource.data.department)/$(request.resource.data.academicYear)/$(string(request.resource.data.year))/$(istDayName())/$(string(request.resource.data.periodNo)))
+             .data.get('classType', '').lower() == 'lab';
+    }
+
+    // Labs are the case where the camera is worst placed — students
+    // face benches, not the front — and the CR is best placed. Theory
+    // stays out of their hands entirely: it's captured by the lecturer's
+    // scan, and letting a student edit it would put the register in the
+    // hands of the people it judges. No approval gate here, unlike the
+    // day-level manual marks, because the lab roster is narrow enough
+    // (own year, own lab slot, today only) to be self-limiting.
     match /period_attendance/{id} {
       allow read: if signedIn();
 
       allow create, update: if isAdmin()
         || (isApprovedFaculty()
-            && request.resource.data.markedBy == request.auth.uid);
+            && request.resource.data.markedBy == request.auth.uid)
+        || crMayMarkLab();
 
       allow delete: if isAdmin();
     }

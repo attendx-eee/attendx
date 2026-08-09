@@ -87,6 +87,7 @@ class _RosterReviewScreenState extends State<RosterReviewScreen> {
       id: '',
       department: AppConfig.department,
       year: widget.year,
+      academicYear: AppConfig.academicYear,
       date: AppConfig.dateId(now),
       periodNo: widget.period.periodNo,
       startTime: widget.period.startTime,
