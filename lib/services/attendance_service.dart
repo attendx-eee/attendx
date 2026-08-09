@@ -123,7 +123,6 @@ class AttendanceService {
     final cached = _scheduleCache[key];
     if (cached != null) return cached;
 
-    List<PeriodModel> periods = const [];
     try {
       final all = await TimetableService.instance.getDaySchedule(
         department: department,
@@ -131,14 +130,21 @@ class AttendanceService {
         year: year,
         day: weekday,
       );
-      periods =
-          all.where((p) => !p.isFree && p.subject.isNotEmpty).toList();
-    } catch (e) {
-      debugPrint('Schedule fetch failed ($key): $e');
-    }
 
-    _scheduleCache[key] = periods;
-    return periods;
+      final periods =
+          all.where((p) => !p.isFree && p.subject.isNotEmpty).toList();
+
+      _scheduleCache[key] = periods;
+      return periods;
+    } catch (e) {
+      // Deliberately not cached. A failed read used to be stored as an
+      // empty timetable, so one dropped request made the whole day look
+      // like it had no classes for the rest of the session — and every
+      // screen downstream reported "no classes scheduled" with complete
+      // confidence. Better to retry on the next call.
+      debugPrint('Schedule fetch failed ($key): $e');
+      return const [];
+    }
   }
 
   /// Classifies one day against the fixed 9:15 / 9:30 AM cutoffs. Returns

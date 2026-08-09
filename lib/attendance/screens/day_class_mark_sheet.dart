@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../admin/models/period_model.dart';
+import '../../admin/services/timetable_service.dart';
 import '../../core/constants/app_config.dart';
 import '../../core/responsive/responsive.dart';
 import '../../core/theme/app_colors.dart';
@@ -8,7 +9,6 @@ import '../../core/theme/app_radius.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../faculty/models/period_attendance.dart';
 import '../../faculty/services/period_attendance_service.dart';
-import '../../services/attendance_service.dart';
 
 /// One day's timetable with a tick beside each class.
 ///
@@ -96,6 +96,13 @@ class _DayClassMarkSheetState extends State<DayClassMarkSheet> {
   /// the unfiltered list is being shown instead.
   bool _batchMismatch = false;
 
+  /// Filled only when the day comes back empty: what was looked up, and
+  /// which years do have a timetable. "No classes scheduled" on its own
+  /// is a dead end — it could mean the timetable is missing, the year
+  /// resolved wrong, or the weekday genuinely has nothing, and the admin
+  /// has no way to tell which.
+  String? _diagnosis;
+
   @override
   void initState() {
     super.initState();
@@ -103,12 +110,20 @@ class _DayClassMarkSheetState extends State<DayClassMarkSheet> {
   }
 
   Future<void> _load() async {
+    final department = AppConfig.departmentOf(widget.studentData);
+    final year = AppConfig.yearOf(widget.studentData);
+    final weekday = AppConfig.dayName(widget.date);
+
     try {
-      final all = await AttendanceService.instance.scheduledPeriods(
-        department: AppConfig.departmentOf(widget.studentData),
-        year: AppConfig.yearOf(widget.studentData),
-        weekday: AppConfig.dayName(widget.date),
-        on: widget.date,
+      // Read straight from the timetable rather than through
+      // AttendanceService: that path filters out free periods and short-
+      // circuits on holidays, both of which look identical to "the
+      // timetable is missing" from in here.
+      final all = await TimetableService.instance.getDaySchedule(
+        department: department,
+        academicYear: AppConfig.academicYear,
+        year: year,
+        day: weekday,
       );
 
       final scheduled = all
@@ -132,9 +147,18 @@ class _DayClassMarkSheetState extends State<DayClassMarkSheet> {
         _batchMismatch = true;
       }
 
+      if (periods.isEmpty) {
+        _diagnosis = await _diagnose(
+          department: department,
+          year: year,
+          weekday: weekday,
+          rawCount: all.length,
+        );
+      }
+
       final records = await PeriodAttendanceService.instance.dayForYear(
-        department: AppConfig.departmentOf(widget.studentData),
-        year: AppConfig.yearOf(widget.studentData),
+        department: department,
+        year: year,
         date: AppConfig.dateId(widget.date),
       );
 
@@ -167,6 +191,75 @@ class _DayClassMarkSheetState extends State<DayClassMarkSheet> {
         });
       }
     }
+  }
+
+  /// Works out *why* the day came back empty and says so.
+  ///
+  /// Three very different causes look identical from the sheet: the
+  /// weekday has nothing on it, the whole year has no timetable, or the
+  /// student's year resolved to one that was never filled in. The third
+  /// is the common one — a student record with no `year` field falls
+  /// back to Year 1 — and it is invisible unless something checks the
+  /// other years and says which do have a timetable.
+  Future<String> _diagnose({
+    required String department,
+    required int year,
+    required String weekday,
+    required int rawCount,
+  }) async {
+    final where = '$department • Year $year • $weekday • '
+        '${AppConfig.academicYear}';
+
+    if (rawCount > 0) {
+      return 'The $weekday timetable for Year $year has $rawCount slot'
+          '${rawCount == 1 ? '' : 's'}, but all of them are free periods '
+          'or have no subject set.\n\nLooked in: $where';
+    }
+
+    // Which years do have something on this weekday?
+    final withTimetable = <int>[];
+    for (final y in const [1, 2, 3, 4]) {
+      try {
+        final periods = await TimetableService.instance.getDaySchedule(
+          department: department,
+          academicYear: AppConfig.academicYear,
+          year: y,
+          day: weekday,
+        );
+        if (periods.any((p) => !p.isFree && p.subject.isNotEmpty)) {
+          withTimetable.add(y);
+        }
+      } catch (_) {
+        // A year we can't read tells us nothing; skip it.
+      }
+    }
+
+    final explicitYear = widget.studentData['year'];
+    final yearGuessed = explicitYear is! int;
+
+    final buffer = StringBuffer();
+
+    if (withTimetable.isEmpty) {
+      buffer.write('No year has a $weekday timetable for '
+          '${AppConfig.academicYear}. Add the periods under '
+          'Timetables first.');
+    } else if (!withTimetable.contains(year)) {
+      buffer.write('Year $year has no $weekday timetable, but '
+          'Year${withTimetable.length == 1 ? '' : 's'} '
+          '${withTimetable.join(', ')} '
+          '${withTimetable.length == 1 ? 'does' : 'do'}.');
+
+      if (yearGuessed) {
+        buffer.write('\n\nThis student record has no "year" field, so the '
+            'app fell back to Year $year. That is very likely the '
+            'problem — set their year on the student record.');
+      }
+    } else {
+      buffer.write('The $weekday timetable for Year $year is empty.');
+    }
+
+    buffer.write('\n\nLooked in: $where');
+    return buffer.toString();
   }
 
   Future<void> _save() async {
@@ -249,6 +342,19 @@ class _DayClassMarkSheetState extends State<DayClassMarkSheet> {
               'are recorded as absent for them — nobody else is affected.',
               style: AppTextStyles.caption,
             ),
+            SizedBox(height: Responsive.h(3)),
+            // Which timetable is being read. Cheap to show and it makes
+            // a wrong year visible at a glance instead of only when the
+            // list comes back empty.
+            Text(
+              '${AppConfig.departmentOf(widget.studentData)} • Year '
+              '${AppConfig.yearOf(widget.studentData)}'
+              '${_batch.isEmpty ? '' : ' • Batch $_batch'}',
+              style: AppTextStyles.caption.copyWith(
+                color: AppColors.primary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
             if (_batchMismatch) ...[
               SizedBox(height: Responsive.h(10)),
               Container(
@@ -300,23 +406,38 @@ class _DayClassMarkSheetState extends State<DayClassMarkSheet> {
     }
 
     if (_periods.isEmpty) {
-      return Padding(
-        padding: Responsive.symmetric(vertical: 30),
-        child: Column(
-          children: [
-            Icon(Icons.event_busy_rounded,
-                size: Responsive.sp(34), color: AppColors.textSecondary),
-            SizedBox(height: Responsive.h(10)),
-            Text('No classes scheduled on this day',
-                style: AppTextStyles.body),
-            SizedBox(height: Responsive.h(4)),
-            Text(
-              'There is nothing to mark class by class. Use the day '
-              'buttons if you still need to record something.',
-              textAlign: TextAlign.center,
-              style: AppTextStyles.caption,
-            ),
-          ],
+      return SingleChildScrollView(
+        child: Padding(
+          padding: Responsive.symmetric(vertical: 24),
+          child: Column(
+            children: [
+              Icon(Icons.event_busy_rounded,
+                  size: Responsive.sp(34), color: AppColors.textSecondary),
+              SizedBox(height: Responsive.h(10)),
+              Text('No classes found for this day',
+                  style: AppTextStyles.body),
+              SizedBox(height: Responsive.h(10)),
+              if (_diagnosis != null)
+                Container(
+                  width: double.infinity,
+                  padding: Responsive.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.warning.withValues(alpha: .10),
+                    borderRadius: BorderRadius.circular(AppRadius.sm),
+                    border: Border.all(
+                        color: AppColors.warning.withValues(alpha: .35)),
+                  ),
+                  child: Text(_diagnosis!, style: AppTextStyles.caption),
+                ),
+              SizedBox(height: Responsive.h(10)),
+              Text(
+                'Use the day buttons if you still need to record '
+                'something for this date.',
+                textAlign: TextAlign.center,
+                style: AppTextStyles.caption,
+              ),
+            ],
+          ),
         ),
       );
     }
