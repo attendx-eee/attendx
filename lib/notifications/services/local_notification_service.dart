@@ -91,6 +91,24 @@ class LocalNotificationService {
 
     await android?.requestNotificationsPermission();
 
+    // Created up front rather than lazily on first use. A push arriving
+    // while the app has never run in the foreground would otherwise
+    // reference a channel that doesn't exist yet, and Android drops
+    // those silently on API 26+.
+    await android?.createNotificationChannel(const AndroidNotificationChannel(
+      'realtime_alerts',
+      'Realtime Alerts',
+      description: 'Attendance changes, timetable updates and announcements',
+      importance: Importance.max,
+    ));
+
+    await android?.createNotificationChannel(const AndroidNotificationChannel(
+      'daily_schedule',
+      'Daily Schedule',
+      description: 'Morning summary of classes and labs',
+      importance: Importance.high,
+    ));
+
     // Android 12 introduced a separate permission for exact alarms, and
     // every schedule below asks for `exactAllowWhileIdle`. Without the
     // grant the plugin throws `exact_alarms_not_permitted` on the very

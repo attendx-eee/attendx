@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 // student APK rather than merely hiding the button.
 import '../core/auth/account_lookup.dart';
 import '../faculty/models/faculty_account.dart';
+import '../notifications/services/push_service.dart';
 import '../faculty/screens/faculty_home.dart';
 import '../services/firestore_service.dart';
 import 'dashboard/dashboard.dart';
@@ -192,6 +193,9 @@ class _FacultyGate extends StatelessWidget {
 
 /// Shared logout helper for root-level screens.
 Future<void> signOutToLogin(BuildContext context) async {
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid != null) await PushService.instance.stop(uid);
+
   await FirebaseAuth.instance.signOut();
   if (!context.mounted) return;
 

@@ -28,6 +28,7 @@ import '../attendance/attendance_screen.dart';
 import '../../notifications/notification_screen.dart';
 import '../../notifications/services/notification_service.dart';
 import '../../notifications/services/local_notification_service.dart';
+import '../../notifications/services/push_service.dart';
 import '../../admin/services/timetable_service.dart';
 import '../../admin/models/period_model.dart';
 import '../../core/constants/app_config.dart';
@@ -158,6 +159,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
           uid: uid,
           studentData: student,
         );
+
+        // Registers this device for push. The Firestore listener above
+        // only runs while the app is alive; this is what reaches them
+        // once it isn't.
+        PushService.instance.start(uid);
       }
     } catch (e) {
       debugPrint("Error loading dashboard: $e");

@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'core/theme/app_theme.dart';
 import 'firebase_options.dart';
+import 'notifications/services/push_service.dart';
 import 'services/face_embedding_service.dart';
 import 'package:flutter_litert/flutter_litert.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,6 +18,13 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
   debugPrint("Firebase Connected Successfully");
+
+  // Registered before runApp, as the plugin requires. This is what lets
+  // a push arrive when the app has been swiped away — the handler runs
+  // in its own isolate, so it can't be a closure over anything here.
+  if (!kIsWeb) {
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  }
 
   // Face recognition runs on-device (Android/iOS). On web the TFLite
   // model isn't available — the app still boots, face features are

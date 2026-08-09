@@ -1,5 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 
+import '../notifications/services/push_service.dart';
+
 class AuthService {
 
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -91,6 +93,12 @@ class AuthService {
   }
 
   Future<void> logoutUser() async {
+    // Drop this device's push token before the credentials go, or the
+    // next person to sign in on a shared department phone keeps getting
+    // the previous student's absence notifications.
+    final uid = _auth.currentUser?.uid;
+    if (uid != null) await PushService.instance.stop(uid);
+
     await _auth.signOut();
   }
 
