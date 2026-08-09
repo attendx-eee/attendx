@@ -26,6 +26,85 @@ developer account.
 Installed apps check Firestore at login and prompt users to update
 when a newer APK is published.
 
+
+## Push notifications (free, no card)
+
+Realtime alerts — "you were marked absent", a cancelled class — need a
+real push, because the app's Firestore listener stops the moment the app
+is killed.
+
+FCM itself is free and unlimited on the Spark plan. What is *not* free
+is Cloud Functions, which needs the Blaze plan and a card on file. But
+Blaze was only ever buying somewhere to run the sender, and the sender
+is 300 lines that can run anywhere. It runs on Cloudflare Workers'
+free tier instead: no card, always on, 100,000 requests a day against a
+workload that uses about 1,440.
+
+`functions/index.js` is the Cloud Functions version of the same thing.
+It is kept for the day this project has a budget; it is not deployed.
+
+### How it works
+
+Everything in the app already writes to the `notifications` collection
+when it wants to tell someone something. Each document now carries
+`pushed: false`. A Cloudflare cron sweeps once a minute for those,
+looks up the recipient's `fcmTokens`, sends, and flips the flag.
+
+A cron sweep rather than a webhook, deliberately. A webhook is faster
+but needs a public endpoint, which needs authentication, which means a
+shared secret inside the APK where anyone can extract it. The sweep has
+no attack surface, and it still delivers when the device that wrote the
+notification goes offline a second later. The cost is up to 60 seconds
+of delay, which for an attendance alert is not a meaningful difference.
+
+### One-time setup
+
+1. **Service account key** — Firebase Console → ⚙ Project settings →
+   Service accounts → **Generate new private key**. This does not need
+   Blaze. Keep the JSON off GitHub.
+
+2. **Cloudflare account** — sign up at dash.cloudflare.com. Free, no
+   card. Then:
+
+   ```
+   cd worker
+   npm install
+   npx wrangler login
+   ```
+
+3. **Secrets**, pasted from the JSON:
+
+   ```
+   npx wrangler secret put FIREBASE_PROJECT_ID     # attendx-18717
+   npx wrangler secret put FIREBASE_CLIENT_EMAIL   # client_email
+   npx wrangler secret put FIREBASE_PRIVATE_KEY    # private_key, whole PEM
+   ```
+
+   Paste the private key exactly as it appears in the JSON, including
+   the `-----BEGIN PRIVATE KEY-----` line. The worker converts the
+   escaped newlines back itself.
+
+4. **Deploy**:
+
+   ```
+   npx wrangler deploy
+   ```
+
+5. **Check it** — open the worker URL printed by deploy. It runs one
+   sweep and replies with what it did, e.g. `OK — sent 2, skipped 0,
+   scanned 2`. `npx wrangler tail` streams the cron logs live.
+
+### If pushes stop arriving
+
+- `npx wrangler tail` — the sweep logs every run and every failure.
+- Check the student's account document has a non-empty `fcmTokens`
+  array. Empty means the app never registered, so there is nothing to
+  send to.
+- Check `notifications` for documents stuck at `pushed: false`. Stuck
+  means the worker isn't running; missing the field entirely means an
+  old document from before this was added, and those are ignored by
+  design.
+
 ## 0. Web apps
 
 Both web front-ends are built and published automatically by

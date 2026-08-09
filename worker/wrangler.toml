@@ -1,0 +1,21 @@
+name = "attendx-push"
+main = "src/index.js"
+compatibility_date = "2026-01-15"
+
+# Every minute. Cloudflare's floor, and the practical delay a student
+# sees between being marked absent and their phone buzzing.
+#
+# 1,440 invocations a day against a free allowance of 100,000, so this
+# uses about 1.4% of the quota and stays free indefinitely.
+[triggers]
+crons = ["* * * * *"]
+
+# Secrets are NOT set here — this file is committed. Set them with:
+#
+#   wrangler secret put FIREBASE_PROJECT_ID
+#   wrangler secret put FIREBASE_CLIENT_EMAIL
+#   wrangler secret put FIREBASE_PRIVATE_KEY
+#
+# The private key is the one thing in this project that must never
+# reach a phone. Cloudflare stores it encrypted and the Worker reads it
+# at runtime; it is not visible in the dashboard after being set.

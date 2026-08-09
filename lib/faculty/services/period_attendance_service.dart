@@ -69,6 +69,9 @@ class PeriodAttendanceService {
           'category': 'attendance',
           'priority': 'high',
           'read': false,
+          // See NotificationService.createNotification — the push
+          // worker sweeps on this flag.
+          'pushed': false,
           'createdAt': FieldValue.serverTimestamp(),
           'action': 'period_attendance',
           'data': {

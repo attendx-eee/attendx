@@ -125,6 +125,12 @@ class NotificationService {
       "category": category,
       "priority": priority,
       "read": false,
+      // Claimed by the push worker, which sweeps for `pushed == false`
+      // once a minute and sends the device notification. Written by
+      // every producer so nothing is silently undeliverable; Firestore
+      // cannot query for a *missing* field, so the flag has to be
+      // present from the start.
+      "pushed": false,
       "createdAt": FieldValue.serverTimestamp(),
       "action": action,
       "data": data,
@@ -175,6 +181,7 @@ class NotificationService {
           "category": category,
           "priority": priority,
           "read": false,
+          "pushed": false,
           "createdAt": FieldValue.serverTimestamp(),
           "action": action,
           "data": data,
