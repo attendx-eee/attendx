@@ -41,7 +41,9 @@ dependencies:
   # anything that has to reach a student who isn't looking at their
   # phone — "you were marked absent", a cancelled class — has to arrive
   # as a real push from a server.
-  firebase_messaging: ^15.2.10
+  # Must track firebase_core's major version — the 15.x line pins
+  # firebase_core ^3, which won't resolve against the ^4 here.
+  firebase_messaging: ^16.3.0
   image_picker: ^1.2.2
   http: ^1.2.2
   google_mlkit_face_detection: ^0.13.2
