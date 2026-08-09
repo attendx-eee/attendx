@@ -94,6 +94,8 @@ of delay, which for an attendance alert is not a meaningful difference.
    sweep and replies with what it did, e.g. `OK — sent 2, skipped 0,
    scanned 2`. `npx wrangler tail` streams the cron logs live.
 
+Live at: `https://attendx-push.attendx-eee.workers.dev`
+
 ### If pushes stop arriving
 
 - `npx wrangler tail` — the sweep logs every run and every failure.

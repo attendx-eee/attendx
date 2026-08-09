@@ -2,6 +2,15 @@ name = "attendx-push"
 main = "src/index.js"
 compatibility_date = "2026-01-15"
 
+# The workers.dev URL is kept: it's the manual "run a sweep now" button
+# used for checking the thing works without waiting for the next minute.
+workers_dev = true
+
+# Preview URLs are not. Every deployment would otherwise get its own
+# permanent address running the same sweep, which is several more public
+# entry points than this needs.
+preview_urls = false
+
 # Every minute. Cloudflare's floor, and the practical delay a student
 # sees between being marked absent and their phone buzzing.
 #
