@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
 import 'core/constants/app_config.dart';
+import 'core/responsive/responsive.dart';
 import 'core/auth/account_lookup.dart';
 import 'core/theme/app_colors.dart';
 import 'core/theme/app_theme.dart';
@@ -67,6 +68,8 @@ class _BootError extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Responsive.init(context);
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: Center(
@@ -221,6 +224,8 @@ class _MissingRole extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Responsive.init(context);
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: Center(
@@ -313,6 +318,8 @@ class _NotAnAdmin extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Responsive.init(context);
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: Center(

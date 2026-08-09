@@ -7,10 +7,23 @@ enum ScreenType { mobile, tablet, desktop }
 class Responsive {
   Responsive._();
 
-  static late MediaQueryData _mediaQuery;
+  static MediaQueryData? _mediaQuery;
 
-  static late double screenWidth;
-  static late double screenHeight;
+  /// Seeded with the design size rather than left `late`.
+  ///
+  /// These used to be `late` with no initialiser, so anything that read
+  /// a size before some widget had called [init] threw a
+  /// LateInitializationError. That is a very easy trap: AppTextStyles
+  /// computes its font sizes through [sp] in a lazy static initialiser,
+  /// so merely *mentioning* AppTextStyles.headline on a screen that
+  /// hadn't called init would throw — and in a release web build a throw
+  /// during build paints a blank grey page with no message at all.
+  ///
+  /// A text style should never be able to take the whole app down. The
+  /// design dimensions are a correct answer until a real MediaQuery
+  /// arrives, and [init] overwrites them on the first build anyway.
+  static double screenWidth = _designWidth;
+  static double screenHeight = _designHeight;
 
   // ------------------------------------------------------------------
   // Breakpoints. Kept here as the single source of truth so every screen
@@ -37,10 +50,11 @@ class Responsive {
   static const double _designHeight = 844;
 
   static void init(BuildContext context) {
-    _mediaQuery = MediaQuery.of(context);
+    final query = MediaQuery.of(context);
+    _mediaQuery = query;
 
-    screenWidth = _mediaQuery.size.width;
-    screenHeight = _mediaQuery.size.height;
+    screenWidth = query.size.width;
+    screenHeight = query.size.height;
   }
 
   /// The multiplier applied to every design-time size.
