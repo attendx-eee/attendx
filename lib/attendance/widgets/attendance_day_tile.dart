@@ -260,25 +260,33 @@ class _Half extends StatelessWidget {
 
     return Container(
       color: fill,
-      padding: const EdgeInsets.only(top: 12),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: compact ? 9 : 12, color: ink),
-          if (!compact) ...[
-            const SizedBox(height: 1),
-            Text(
-              '$attended/$total',
-              maxLines: 1,
-              style: TextStyle(
-                color: ink,
-                fontWeight: FontWeight.w800,
-                fontSize: 9.5,
-                height: 1,
+      // Leaves the top strip clear for the date in the corner. Smaller
+      // when compact, where the whole tile is barely taller than this.
+      padding: EdgeInsets.only(top: compact ? 6 : 12),
+      child: FittedBox(
+        // The halves get whatever width seven columns leaves them, which
+        // on a narrow phone is very little. Scaling down beats an
+        // overflow stripe across the calendar.
+        fit: BoxFit.scaleDown,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: compact ? 9 : 12, color: ink),
+            if (!compact) ...[
+              const SizedBox(height: 1),
+              Text(
+                '$attended/$total',
+                maxLines: 1,
+                style: TextStyle(
+                  color: ink,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 9.5,
+                  height: 1,
+                ),
               ),
-            ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

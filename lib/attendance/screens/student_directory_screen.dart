@@ -233,12 +233,18 @@ class _StudentDirectoryScreenState extends State<StudentDirectoryScreen> {
                           (b.data()['name'] ?? '').toString().toLowerCase()));
 
                 if (students.isEmpty) {
-                  return ListView(
-                    padding: Responsive.all(18),
+                  // Column + Expanded, not a ListView. _buildEmpty ends
+                  // in a Center wrapping an unbounded Column, which a
+                  // ListView child cannot size — it throws rather than
+                  // rendering, and the whole list area comes back blank.
+                  return Column(
                     children: [
                       if (strays.isNotEmpty && widget.marker.isAdmin)
-                        _buildStrayNotice(strays),
-                      _buildEmpty(),
+                        Padding(
+                          padding: Responsive.all(18),
+                          child: _buildStrayNotice(strays),
+                        ),
+                      Expanded(child: _buildEmpty()),
                     ],
                   );
                 }

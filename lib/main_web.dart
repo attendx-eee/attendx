@@ -25,11 +25,94 @@ import 'web/admin_web_shell.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  // Anything thrown while building a widget paints this instead of the
+  // red-and-yellow default, which in a release web build is just a grey
+  // rectangle with no text at all.
+  ErrorWidget.builder = (details) => _BootError(
+        title: 'Something failed to render',
+        detail: details.exceptionAsString(),
+      );
 
-  runApp(const AdminWebApp());
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+
+    runApp(const AdminWebApp());
+  } catch (e, stack) {
+    // A throw here used to mean runApp never ran, and the page stayed
+    // blank grey forever — no error, no spinner, nothing to search for.
+    // Whatever went wrong, say so on screen: the console is opened on a
+    // department PC by someone who won't be reading DevTools.
+    debugPrint('Admin console failed to start: $e\n$stack');
+
+    runApp(MaterialApp(
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.light,
+      home: _BootError(
+        title: "The console couldn't start",
+        detail: '$e',
+      ),
+    ));
+  }
+}
+
+/// Last-resort screen. Deliberately plain — it has to render even when
+/// the thing that broke is the app itself.
+class _BootError extends StatelessWidget {
+  final String title;
+  final String detail;
+
+  const _BootError({required this.title, required this.detail});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(28),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 620),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.error_outline_rounded,
+                    color: AppColors.danger, size: 40),
+                const SizedBox(height: 16),
+                Text(title, style: AppTextStyles.headline),
+                const SizedBox(height: 10),
+                Text(
+                  'Try a hard reload first (Ctrl+Shift+R) — a half-updated '
+                  'cache after a new deploy looks exactly like this.',
+                  style: AppTextStyles.caption,
+                ),
+                const SizedBox(height: 18),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.divider),
+                  ),
+                  child: SelectableText(
+                    detail,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 12.5,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class AdminWebApp extends StatelessWidget {
