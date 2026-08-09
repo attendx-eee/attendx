@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -11,16 +10,15 @@ import '../../core/theme/app_text_styles.dart';
 import '../../admin/models/faculty_model.dart';
 import '../../admin/services/master_data_service.dart';
 import '../../screens/face_enrollment_screen.dart';
-import '../../screens/role_router.dart';
 import '../../services/enrollment/scan_harvester.dart';
 import '../models/faculty_account.dart';
 
 /// Faculty sign-up.
 ///
-/// Shorter than the student flow and quite different in shape: no roll
-/// number, no year or semester, and no face enrollment — a faculty
-/// member signs in with a password to mark other people's attendance,
-/// they don't check in through the gate themselves.
+/// Shorter than the student flow: no roll number, no year, no semester.
+/// Face enrollment is still required, though — a faculty member's own
+/// face has to be on file so the duplicate check can catch someone
+/// signing up twice, and so they can unlock the app biometrically.
 ///
 /// Anyone can sign up; the account is created pending. An admin then
 /// checks the details, corrects anything wrong, and links it to a
@@ -119,39 +117,35 @@ class _FacultyRegisterScreenState extends State<FacultyRegisterScreen> {
         mobile: _mobile.text.trim(),
       );
 
-      await FirebaseFirestore.instance
-          .collection(AccountLookup.facultyAccounts)
-          .doc(uid)
-          .set(account.toMap());
-
       if (!mounted) return;
 
-      // Straight into face enrollment, same as a student registering.
+      // The details are NOT written yet. They travel into face
+      // enrollment as a pending profile and are saved there, in one
+      // batch with the face template, only once the scan succeeds and
+      // the duplicate check clears.
       //
-      // Creating the account already signed them in, so there's no
-      // reason to bounce them out to the login screen and back. Doing it
-      // now also means the duplicate-face check runs while the account
-      // is still pending — catching someone enrolling a face already on
-      // file *before* an admin approves them, rather than after.
+      // Writing them first meant a face already enrolled under another
+      // account still left a complete, named faculty record sitting in
+      // the collection waiting for an admin to approve it — the exact
+      // thing the duplicate check exists to prevent. Now a rejected
+      // scan leaves nothing behind but an auth account, which the
+      // enrollment screen rolls back on cancel.
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => const FaceEnrollmentScreen(
-            mandatory: false,
+          builder: (_) => FaceEnrollmentScreen(
+            mandatory: true,
+            pendingProfile: account.toMap(),
+            profileCollection: AccountLookup.facultyAccounts,
             scanProfile: ScanProfile.frontalOnly,
           ),
         ),
       );
 
-      if (!mounted) return;
-
-      // Then the dashboard, which shows the waiting-for-approval state
-      // until an admin links them to a timetable record.
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => const RoleRouter()),
-        (_) => false,
-      );
+      // No navigation here. The enrollment screen sends them on to
+      // RoleRouter itself when it succeeds, and when it doesn't it
+      // rolls the account back to the login screen — pushing the
+      // dashboard from here would land a rejected sign-up on it anyway.
     } on FirebaseAuthException catch (e) {
       setState(() {
         _busy = false;

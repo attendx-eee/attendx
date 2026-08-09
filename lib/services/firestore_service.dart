@@ -1,10 +1,33 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../core/auth/account_lookup.dart';
 import 'adaptive_face_service.dart';
 import 'enrollment/scan_harvester.dart';
 
 class FirestoreService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  /// The document holding this account's profile, wherever it lives.
+  ///
+  /// Face enrollment is the one flow used by students, CRs and faculty
+  /// alike, and it writes `faceEnrolled` back onto the profile. Once
+  /// faculty moved to their own collection, hard-coding `students` here
+  /// meant every faculty enrollment failed at the last step — the scan
+  /// had already succeeded, so it surfaced as an unexplained
+  /// "storage sync rejected" with no hint that the record was simply
+  /// being looked for in the wrong place.
+  Future<DocumentReference<Map<String, dynamic>>?> profileRef(
+      String uid) async {
+    for (final name in const [
+      AccountLookup.students,
+      AccountLookup.facultyAccounts,
+      AccountLookup.admins,
+    ]) {
+      final ref = _firestore.collection(name).doc(uid);
+      if ((await ref.get()).exists) return ref;
+    }
+    return null;
+  }
 
   Future<void> saveStudent(Map<String, dynamic> data) async {
     await _firestore
@@ -57,6 +80,11 @@ class FirestoreService {
     required Map<String, dynamic> profile,
     required Map<String, List<double>> fusedEmbeddings,
     EnrollmentGrade? grade,
+    /// Where the profile belongs. Students and CRs land in `students`,
+    /// faculty in `faculty_accounts` — same atomic write either way, so
+    /// a faculty sign-up can't leave a pending account behind when the
+    /// face turns out to be someone else's.
+    String collection = AccountLookup.students,
   }) async {
     if (fusedEmbeddings.isEmpty) {
       throw Exception(
@@ -93,7 +121,7 @@ class FirestoreService {
 
     final batch = _firestore.batch();
 
-    final studentRef = _firestore.collection('students').doc(uid);
+    final studentRef = _firestore.collection(collection).doc(uid);
     batch.set(
       studentRef,
       {
@@ -212,18 +240,21 @@ class FirestoreService {
       );
     }
 
-    // Read student details
-    final studentDoc =
-        await _firestore.collection('students').doc(uid).get();
+    // Whichever collection this account lives in — student, faculty or
+    // admin. All three can enroll a face.
+    final ref = await profileRef(uid);
 
-    if (!studentDoc.exists) {
-      throw Exception("Student record not found.");
+    if (ref == null) {
+      throw Exception(
+        'No profile found for this account in students, '
+        '${AccountLookup.facultyAccounts} or ${AccountLookup.admins}.',
+      );
     }
 
-    final studentData = studentDoc.data()!;
+    final profileData = (await ref.get()).data() ?? const <String, dynamic>{};
 
-    final String name = studentData['name'] ?? '';
-    final String regNo = studentData['regNo'] ?? '';
+    final String name = profileData['name'] ?? '';
+    final String regNo = profileData['regNo'] ?? '';
 
     // Normalize embeddings
     final Map<String, dynamic> verifiedEmbeddings = {};
@@ -273,11 +304,8 @@ class FirestoreService {
       'enrolledAt': FieldValue.serverTimestamp(),
     });
 
-    // Update only enrollment status in student profile
-    await _firestore
-        .collection('students')
-        .doc(uid)
-        .update({
+    // Update only enrollment status on the profile
+    await ref.update({
       'faceEnrolled': true,
       'faceImagesCaptured': totalImages,
       'faceEnrolledAt': FieldValue.serverTimestamp(),

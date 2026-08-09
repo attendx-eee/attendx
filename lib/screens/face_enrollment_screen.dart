@@ -4,10 +4,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'dart:async';
 
+import '../core/auth/account_lookup.dart';
 import '../models/face_enrollment_imports.dart';
 import '../services/enrollment/scan_coach.dart';
 import '../services/enrollment/scan_guide.dart';
@@ -46,12 +48,17 @@ class FaceEnrollmentScreen extends StatefulWidget {
   /// short one.
   final ScanProfile scanProfile;
 
+  /// Which collection [pendingProfile] belongs in. Students and CRs use
+  /// the default; faculty sign-ups pass `faculty_accounts`.
+  final String profileCollection;
+
   const FaceEnrollmentScreen({
     super.key,
     this.mandatory = false,
     this.pendingProfile,
     this.pendingPhoto,
     this.scanProfile = ScanProfile.quick,
+    this.profileCollection = AccountLookup.students,
   }) : assert(
           !mandatory || pendingProfile != null,
           'pendingProfile is required when mandatory is true',
@@ -940,6 +947,7 @@ Future<void> _uploadEmbeddingsToFirebase() async {
         profile: profile,
         fusedEmbeddings: fusedEmbeddings,
         grade: grade,
+        collection: widget.profileCollection,
       );
     } else {
       // Re-enrollment: the profile already exists, just refresh the
@@ -979,10 +987,23 @@ Future<void> _uploadEmbeddingsToFirebase() async {
   } catch (e) {
     debugPrint("========== FIRESTORE ERROR ==========");
     debugPrint(e.toString());
-    _showSnackbar("Cloud Database storage sync rejected.", Colors.red);
+
+    // "Cloud Database storage sync rejected" was all this used to say,
+    // for every possible cause. When faculty moved to their own
+    // collection and the profile write started looking in the wrong
+    // place, the scan succeeded and then died on a sentence that named
+    // neither the step nor the reason. Say what actually happened.
+    final detail = e is FirebaseException
+        ? (e.message ?? e.code)
+        : e.toString();
+
+    _showSnackbar(
+      "Couldn't save the enrollment: $detail",
+      Colors.red,
+    );
     _setFlowState(
       EnrollmentFlowState.failed,
-      "Enrollment failed",
+      "Enrollment failed — $detail",
     );
     _resetForManualRetry();
   }

@@ -121,9 +121,10 @@ class FacultyAccount {
   Map<String, dynamic> toMap() => {
         'uid': uid,
         'facultyId': facultyId,
-        // Named `facultyStatus` rather than `status` because these docs
-        // share the `students` collection, where `status` is already
-        // spoken for by other flows.
+        // Named `facultyStatus` rather than `status`. It predates the
+        // move to `faculty_accounts`, when these docs shared `students`
+        // and `status` was already spoken for — kept as-is because the
+        // security rules and every existing document use this name.
         'facultyStatus': status,
         'decisionNote': decisionNote,
         'name': name,
@@ -135,9 +136,9 @@ class FacultyAccount {
         'email': email,
         'mobile': mobile,
         'active': active,
-        // Faculty accounts live in `students` alongside everyone else so
-        // one role lookup answers "who is this" for every screen in the
-        // app. The role field is what separates them.
+        // Redundant now that the collection itself says what these are,
+        // but kept so records that haven't been migrated out of
+        // `students` still resolve to the right role.
         'role': 'faculty',
         'createdAt': createdAt ?? FieldValue.serverTimestamp(),
       };
