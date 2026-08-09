@@ -7,8 +7,6 @@ enum ScreenType { mobile, tablet, desktop }
 class Responsive {
   Responsive._();
 
-  static MediaQueryData? _mediaQuery;
-
   /// Seeded with the design size rather than left `late`.
   ///
   /// These used to be `late` with no initialiser, so anything that read
@@ -51,7 +49,6 @@ class Responsive {
 
   static void init(BuildContext context) {
     final query = MediaQuery.of(context);
-    _mediaQuery = query;
 
     screenWidth = query.size.width;
     screenHeight = query.size.height;

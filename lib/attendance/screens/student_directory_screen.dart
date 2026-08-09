@@ -73,6 +73,11 @@ class _StudentDirectoryScreenState extends State<StudentDirectoryScreen> {
     final label = name.isEmpty ? 'this unnamed record' : name;
     final incomplete = name.isEmpty && regNo.isEmpty;
 
+    // Resolved before the dialog, not after: awaiting showDialog is an
+    // async gap, and reaching back through `context` on the far side of
+    // one is only safe by luck.
+    final messenger = ScaffoldMessenger.of(context);
+
     final go = await showDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
@@ -124,8 +129,6 @@ class _StudentDirectoryScreenState extends State<StudentDirectoryScreen> {
         false;
 
     if (!go) return;
-
-    final messenger = ScaffoldMessenger.of(context);
 
     try {
       await FirebaseFirestore.instance

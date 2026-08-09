@@ -161,8 +161,6 @@ class AdaptiveFaceService {
   /// worth the cost.
   static const int duplicatePrefilterTopK = 5;
 
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
   // -------------------------------------------------------------- math
 
   static double cosine(List<double> a, List<double> b) {

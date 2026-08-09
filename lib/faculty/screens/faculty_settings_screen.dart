@@ -516,12 +516,19 @@ class _FacultySettingsScreenState extends State<FacultySettingsScreen> {
           SizedBox(height: Responsive.h(12)),
           SizedBox(
             width: double.infinity,
-            child: available
+            // Tested against `status` directly rather than the `available`
+            // bool. They mean the same thing, but a bool carries no type
+            // information — the compiler can't tell that `available` being
+            // true implies `status` is non-null, so reading `status.apkUrl`
+            // below would need a `!`. Checking the nullable value itself
+            // promotes it, and a final local stays promoted inside the
+            // closure.
+            child: (status != null && status.available)
                 ? ElevatedButton.icon(
                     onPressed: () =>
-                        UpdateService.instance.downloadUpdate(status!.apkUrl),
+                        UpdateService.instance.downloadUpdate(status.apkUrl),
                     icon: const Icon(Icons.download_rounded, size: 18),
-                    label: Text('Update to v${status!.latest}'),
+                    label: Text('Update to v${status.latest}'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
