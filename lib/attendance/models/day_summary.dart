@@ -41,8 +41,12 @@ class DaySummary {
   final int labAttended;
   final int labTotal;
 
-  /// Periods scheduled but not yet marked by anyone.
-  final int unmarked;
+  /// Scheduled but not yet marked by anyone, split the same way as the
+  /// totals — the calendar tile colours theory and lab independently, so
+  /// it has to know which half is still waiting rather than just how
+  /// many periods are.
+  final int theoryUnmarked;
+  final int labUnmarked;
 
   const DaySummary({
     required this.date,
@@ -50,14 +54,25 @@ class DaySummary {
     this.theoryTotal = 0,
     this.labAttended = 0,
     this.labTotal = 0,
-    this.unmarked = 0,
+    this.theoryUnmarked = 0,
+    this.labUnmarked = 0,
   });
 
   int get attended => theoryAttended + labAttended;
   int get total => theoryTotal + labTotal;
 
+  int get unmarked => theoryUnmarked + labUnmarked;
+
   /// Periods that have actually been marked one way or the other.
   int get marked => total - unmarked;
+
+  int get theoryMarked => theoryTotal - theoryUnmarked;
+  int get labMarked => labTotal - labUnmarked;
+
+  double get theoryRatio =>
+      theoryTotal == 0 ? 0 : theoryAttended / theoryTotal;
+
+  double get labRatio => labTotal == 0 ? 0 : labAttended / labTotal;
 
   DayAttendance get status {
     if (total == 0) return DayAttendance.noClass;
@@ -158,8 +173,8 @@ class DaySummaryBuilder {
     required Map<int, PeriodAttendance> records,
     String studentBatch = '',
   }) {
-    var theoryAttended = 0, theoryTotal = 0;
-    var labAttended = 0, labTotal = 0, unmarked = 0;
+    var theoryAttended = 0, theoryTotal = 0, theoryUnmarked = 0;
+    var labAttended = 0, labTotal = 0, labUnmarked = 0;
 
     for (final period in periods) {
       if (period.isFree || period.subject.isEmpty) continue;
@@ -184,7 +199,11 @@ class DaySummaryBuilder {
       // A record scoped to other students says nothing about this one,
       // so it counts as unmarked rather than as an absence.
       if (record == null || !record.covers(uid)) {
-        unmarked++;
+        if (isLab) {
+          labUnmarked++;
+        } else {
+          theoryUnmarked++;
+        }
         continue;
       }
 
@@ -203,7 +222,8 @@ class DaySummaryBuilder {
       theoryTotal: theoryTotal,
       labAttended: labAttended,
       labTotal: labTotal,
-      unmarked: unmarked,
+      theoryUnmarked: theoryUnmarked,
+      labUnmarked: labUnmarked,
     );
   }
 }

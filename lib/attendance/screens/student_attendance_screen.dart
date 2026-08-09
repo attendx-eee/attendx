@@ -15,6 +15,7 @@ import '../models/attendance_marker.dart';
 import '../models/attendance_permission_model.dart';
 import '../models/day_summary.dart';
 import '../models/manual_attendance_model.dart';
+import '../widgets/attendance_day_tile.dart';
 import '../services/attendance_permission_service.dart';
 import '../services/manual_attendance_service.dart';
 import 'day_class_mark_sheet.dart';
@@ -1360,6 +1361,10 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
               crossAxisCount: 7,
               crossAxisSpacing: 6,
               mainAxisSpacing: 6,
+              // Taller than wide. The split tile stacks an icon over a
+              // fraction in each half, and a square tile leaves room for
+              // neither once the date is in the corner.
+              childAspectRatio: .82,
             ),
             itemBuilder: (_, index) {
               if (index < firstWeekdayOffset) return const SizedBox();
@@ -1502,15 +1507,18 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
       spacing: Responsive.w(14),
       runSpacing: Responsive.h(10),
       children: [
-        const _LegendDot(color: AppColors.success, label: "All classes"),
-        _LegendDot(
-            color: attendanceShade(0.5), label: "Part of the day"),
+        const _LegendDot(color: AppColors.success, label: "All attended"),
+        _LegendDot(color: attendanceShade(0.5), label: "Part attended"),
         const _LegendDot(color: AppColors.danger, label: "None attended"),
+        const _LegendDot(color: Colors.white, label: "Not registered yet"),
         const _LegendDot(color: AppColors.warning, label: "Late"),
         const _LegendDot(color: holidayFill, label: "Holiday"),
         const _LegendDot(color: AppColors.divider, label: "No class"),
         const _LegendDot(
             color: AppColors.primary, label: "Dot = marked by hand"),
+        const _LegendIcon(
+            icon: Icons.menu_book_rounded, label: "Theory half"),
+        const _LegendIcon(icon: Icons.science_rounded, label: "Lab half"),
       ],
     );
   }
@@ -1642,13 +1650,16 @@ class _PermissionBanner extends StatelessWidget {
   }
 }
 
-/// A single date in the grid. Colour carries the verdict; the small dot
-/// in the corner says a human set it rather than the scanner.
+/// A single date in the grid.
+///
+/// Thin wrapper over [AttendanceDayTile]: this maps the gate verdict to
+/// a fallback colour, the tile decides everything else — the theory/lab
+/// split, the shading, the holiday name.
 class _DayCell extends StatelessWidget {
   final int day;
   final DayVerdict verdict;
 
-  /// Per-class counts for the day, when any class has been registered.
+  /// Per-class counts for the day, when the day has a timetable.
   final DaySummary? summary;
 
   final bool isToday;
@@ -1670,7 +1681,7 @@ class _DayCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (Color baseFill, Color baseText) = switch (verdict.status) {
+    final (Color fill, Color text) = switch (verdict.status) {
       DayStatus.present => (AppColors.success, Colors.white),
       DayStatus.late => (AppColors.warning, Colors.white),
       DayStatus.absent => (AppColors.danger, Colors.white),
@@ -1678,100 +1689,21 @@ class _DayCell extends StatelessWidget {
       DayStatus.upcoming => (Colors.transparent, AppColors.textPrimary),
     };
 
-    Color fill = baseFill;
-    Color text = baseText;
-
-    // Registers beat the gate, and the shade carries the percentage:
-    // red at nothing attended, amber at half, green at all of it. A flat
-    // colour would make 1-of-6 and 5-of-6 look alike.
-    final marks = (summary != null && summary!.marked > 0) ? summary : null;
-
-    if (marks != null) {
-      fill = attendanceShade(marks.ratio);
-      text = Colors.white;
-    }
-
-    // A closed day is not the same as a day with an empty timetable, and
-    // showing both as blank grey is why holidays were invisible here.
-    // Dark grey, and it wins over everything below it: if the college
-    // was shut, no amount of missing check-in makes it an absence.
-    if (verdict.isHoliday) {
-      fill = holidayFill;
-      text = Colors.white;
-    }
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(Responsive.radius(10)),
-        onTap: onTap,
-        onLongPress: onLongPress,
-        child: Opacity(
-          opacity: enabled ? 1 : .65,
-          child: Container(
-            decoration: BoxDecoration(
-              color: fill,
-              borderRadius: BorderRadius.circular(Responsive.radius(10)),
-              // A selected day gets a heavy blue ring, which reads over
-              // any of the status fills underneath it.
-              border: Border.all(
-                color: selected
-                    ? AppColors.primary
-                    : (isToday ? AppColors.primary : AppColors.divider),
-                width: selected ? 3 : (isToday ? 2 : 1),
-              ),
-            ),
-            child: Stack(
-              children: [
-                Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        "$day",
-                        style: TextStyle(
-                          color: text,
-                          fontWeight: FontWeight.w700,
-                          fontSize: Responsive.sp(12),
-                        ),
-                      ),
-                      if (verdict.isHoliday && marks == null)
-                        Icon(Icons.beach_access_rounded,
-                            size: Responsive.sp(9), color: text)
-                      else if (marks != null)
-                        Text(
-                          marks.fraction,
-                          maxLines: 1,
-                          style: TextStyle(
-                            color: text.withValues(alpha: .85),
-                            fontWeight: FontWeight.w600,
-                            fontSize: Responsive.sp(8),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                if (verdict.isManual)
-                  Positioned(
-                    top: 3,
-                    right: 3,
-                    child: Container(
-                      width: 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        color: verdict.status == DayStatus.noClass ||
-                                verdict.status == DayStatus.upcoming
-                            ? AppColors.primary
-                            : Colors.white,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
+    return AttendanceDayTile(
+      day: day,
+      // A holiday has no classes to split, and a manual whole-day mark
+      // is a deliberate override of the per-class picture — showing both
+      // at once would have the tile arguing with itself.
+      summary: verdict.isHoliday || verdict.isManual ? null : summary,
+      holidayName: verdict.closureReason,
+      fallbackFill: fill,
+      fallbackText: text,
+      isToday: isToday,
+      selected: selected,
+      manual: verdict.isManual,
+      dimmed: !enabled,
+      onTap: onTap,
+      onLongPress: onLongPress,
     );
   }
 }
@@ -1858,6 +1790,27 @@ class _WeekdayLabel extends StatelessWidget {
   }
 }
 
+/// Legend entry for the half-tile icons rather than a colour.
+class _LegendIcon extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _LegendIcon({required this.icon, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon,
+            size: Responsive.sp(13), color: AppColors.textSecondary),
+        SizedBox(width: Responsive.w(6)),
+        Text(label, style: AppTextStyles.caption),
+      ],
+    );
+  }
+}
+
 class _LegendDot extends StatelessWidget {
   final Color color;
   final String label;
@@ -1875,6 +1828,9 @@ class _LegendDot extends StatelessWidget {
           decoration: BoxDecoration(
             color: color,
             borderRadius: BorderRadius.circular(Responsive.radius(4)),
+            // Without this the white "not registered yet" swatch is
+            // invisible against the card.
+            border: Border.all(color: AppColors.divider),
           ),
         ),
         SizedBox(width: Responsive.w(6)),

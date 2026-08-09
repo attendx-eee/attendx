@@ -42,8 +42,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
   // Current month
   Map<int, String> _calendarStatuses = {};
-  Map<int, String> _calendarFractions = {};
-  Map<int, double> _calendarRatios = {};
+  Map<int, DaySummary> _calendarSummaries = {};
   Map<int, String> _calendarHolidays = {};
   String _monthLabel = '';
 
@@ -156,8 +155,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
       int presentDays = 0, absentDays = 0, totalDays = 0;
       final calendar = <int, String>{};
-      final fractions = <int, String>{};
-      final ratios = <int, double>{};
       final holidays = <int, String>{};
 
       // Holidays are collected over the whole month, not just the days
@@ -220,37 +217,14 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         }
 
         // Current month calendar colouring.
+        //
+        // Only the gate verdict goes in here. Days that have a timetable
+        // are drawn from their DaySummary instead — the tile splits them
+        // into theory and lab and shades each half on its own, which a
+        // single status string can't express.
         if (isCurrentMonth) {
-          final summary = periodDays[date.day];
-
-          // Only treat the period records as authoritative for a day
-          // once somebody has actually marked something on it.
-          final marks = (summary != null &&
-                  summary.total > 0 &&
-                  summary.marked > 0)
-              ? summary
-              : null;
-
-          if (marks != null) {
-            fractions[date.day] = marks.fraction;
-            ratios[date.day] = marks.ratio;
-          }
-
           if (isToday) {
             calendar[date.day] = 'today';
-          } else if (marks != null) {
-            // Marked classes beat the gate event for this day.
-            switch (marks.status) {
-              case DayAttendance.full:
-                calendar[date.day] = verdict.late ? 'late' : 'present';
-              case DayAttendance.partial:
-                calendar[date.day] = 'partial';
-              case DayAttendance.absent:
-                calendar[date.day] = 'absent';
-              case DayAttendance.noClass:
-              case DayAttendance.notMarked:
-                break;
-            }
           } else if (verdict.present) {
             calendar[date.day] = verdict.late ? 'late' : 'present';
           } else if (event != null) {
@@ -392,8 +366,13 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         _totalDays = totalDays;
 
         _calendarStatuses = calendar;
-        _calendarFractions = fractions;
-        _calendarRatios = ratios;
+        // Every day of the month that has a timetable, not just the
+        // marked ones — a tile has to show "0/2 theory, not registered"
+        // as readily as it shows a full green.
+        _calendarSummaries = {
+          for (final e in periodDays.entries)
+            if (e.value.total > 0) e.key: e.value,
+        };
         _calendarHolidays = holidays;
         _periodTotals = periodTotals;
         _monthLabel = DateFormat('MMMM yyyy').format(today);
@@ -495,8 +474,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             month: today.month,
                             monthLabel: _monthLabel,
                             dayStatuses: _calendarStatuses,
-                            dayFractions: _calendarFractions,
-                            dayRatios: _calendarRatios,
+                            daySummaries: _calendarSummaries,
                             dayHolidays: _calendarHolidays,
                           ),
                           if (_periodTotals.total > 0) ...[

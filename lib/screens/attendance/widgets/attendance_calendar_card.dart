@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../../attendance/models/day_summary.dart';
+import '../../../attendance/widgets/attendance_day_tile.dart';
 import '../../../core/responsive/responsive.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_colors.dart';
@@ -10,19 +12,14 @@ class AttendanceCalendarCard extends StatelessWidget {
   final int month;
   final String monthLabel;
 
-  /// day-of-month -> 'present' | 'partial' | 'absent' | 'late' | 'today'
+  /// day-of-month -> 'present' | 'absent' | 'late' | 'today'
+  ///
+  /// The gate verdict. Used only where there are no class registers to
+  /// be more specific with.
   final Map<int, String> dayStatuses;
 
-  /// day-of-month -> "1/2", shown under the date.
-  ///
-  /// A colour alone can't tell you whether a partial day was one class
-  /// out of two or five out of six, and that difference is the whole
-  /// point of counting periods instead of days.
-  final Map<int, String> dayFractions;
-
-  /// day-of-month -> 0..1, how much of the day was attended. Drives the
-  /// shade so a 5-of-6 day reads greener than a 1-of-6 one.
-  final Map<int, double> dayRatios;
+  /// day-of-month -> per-class counts. Drives the theory/lab split.
+  final Map<int, DaySummary> daySummaries;
 
   /// day-of-month -> why the college was closed.
   final Map<int, String> dayHolidays;
@@ -33,8 +30,7 @@ class AttendanceCalendarCard extends StatelessWidget {
     required this.month,
     required this.monthLabel,
     this.dayStatuses = const {},
-    this.dayFractions = const {},
-    this.dayRatios = const {},
+    this.daySummaries = const {},
     this.dayHolidays = const {},
   });
 
@@ -43,6 +39,7 @@ class AttendanceCalendarCard extends StatelessWidget {
     // Grid offset so day 1 lands under its weekday (header starts Sunday).
     final firstWeekdayOffset = DateTime(year, month, 1).weekday % 7;
     final daysInMonth = DateTime(year, month + 1, 0).day;
+    final today = DateTime.now();
 
     return Container(
       padding: Responsive.all(AppSpacing.lg),
@@ -111,8 +108,11 @@ class AttendanceCalendarCard extends StatelessWidget {
             gridDelegate:
                 const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 7,
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
+              crossAxisSpacing: 6,
+              mainAxisSpacing: 6,
+              // Slightly taller than wide: the split tile stacks an icon
+              // over a fraction, and a square leaves no room for either.
+              childAspectRatio: .82,
             ),
             itemBuilder: (_, index) {
 
@@ -122,80 +122,23 @@ class AttendanceCalendarCard extends StatelessWidget {
 
               final day = index - firstWeekdayOffset + 1;
 
-              Color color = Colors.transparent;
-              Color text = Colors.black87;
-              final fraction = dayFractions[day];
-              final holiday = dayHolidays[day];
+              final (Color fill, Color text) = switch (dayStatuses[day]) {
+                'present' => (AppColors.success, Colors.white),
+                'absent' => (AppColors.danger, Colors.white),
+                'late' => (AppColors.warning, Colors.white),
+                'today' => (AppColors.primary, Colors.white),
+                _ => (Colors.transparent, AppColors.textPrimary),
+              };
 
-              switch (dayStatuses[day]) {
-                case 'present':
-                  color = Colors.green;
-                  text = Colors.white;
-                  break;
-                case 'partial':
-                  color = attendanceShade(dayRatios[day] ?? .5);
-                  text = Colors.white;
-                  break;
-                case 'absent':
-                  color = Colors.red;
-                  text = Colors.white;
-                  break;
-                case 'late':
-                  color = Colors.orange;
-                  text = Colors.white;
-                  break;
-                case 'today':
-                  color = Colors.blue;
-                  text = Colors.white;
-                  break;
-              }
-
-              // A closed day outranks whatever the gate recorded — the
-              // college wasn't open, so there was nothing to attend.
-              if (holiday != null) {
-                color = holidayFill;
-                text = Colors.white;
-              }
-
-              return Container(
-                decoration: BoxDecoration(
-                  color: color,
-                  borderRadius: BorderRadius.circular(
-                    Responsive.radius(10),
-                  ),
-                  border: Border.all(
-                    color: Colors.grey.shade300,
-                  ),
-                ),
-                alignment: Alignment.center,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      "$day",
-                      style: TextStyle(
-                        color: text,
-                        fontWeight: FontWeight.w600,
-                        fontSize: Responsive.sp(12),
-                      ),
-                    ),
-                    if (holiday != null)
-                      Icon(Icons.beach_access_rounded,
-                          size: Responsive.sp(9), color: Colors.white)
-                    else if (fraction != null)
-                      Text(
-                        fraction,
-                        maxLines: 1,
-                        style: TextStyle(
-                          color: color == Colors.transparent
-                              ? Colors.grey
-                              : Colors.white70,
-                          fontWeight: FontWeight.w600,
-                          fontSize: Responsive.sp(8),
-                        ),
-                      ),
-                  ],
-                ),
+              return AttendanceDayTile(
+                day: day,
+                summary: daySummaries[day],
+                holidayName: dayHolidays[day],
+                fallbackFill: fill,
+                fallbackText: text,
+                isToday: day == today.day &&
+                    month == today.month &&
+                    year == today.year,
               );
             },
           ),
@@ -207,34 +150,50 @@ class AttendanceCalendarCard extends StatelessWidget {
             runSpacing: Responsive.h(12),
             children: [
 
-              const _Legend(
-                Colors.green,
-                "All classes",
-              ),
+              const _Legend(AppColors.success, "All attended"),
 
-              _Legend(
-                attendanceShade(.5),
-                "Part of the day",
-              ),
+              _Legend(attendanceShade(.5), "Part attended"),
 
-              const _Legend(
-                holidayFill,
-                "Holiday",
-              ),
+              const _Legend(AppColors.danger, "None attended"),
 
-              const _Legend(
-                Colors.red,
-                "Absent",
-              ),
+              const _Legend(Colors.white, "Not registered yet"),
 
-              const _Legend(
-                Colors.orange,
-                "Late",
-              ),
+              const _Legend(holidayFill, "Holiday"),
 
-              const _Legend(
-                Colors.blue,
-                "Today",
+              const _Legend(AppColors.warning, "Late"),
+            ],
+          ),
+
+          SizedBox(height: Responsive.h(12)),
+
+          Row(
+            children: [
+              Icon(Icons.menu_book_rounded,
+                  size: Responsive.sp(13), color: AppColors.textSecondary),
+              SizedBox(width: Responsive.w(4)),
+              Text("Theory", style: TextStyle(
+                color: Colors.grey.shade700,
+                fontSize: Responsive.sp(11),
+                fontWeight: FontWeight.w500,
+              )),
+              SizedBox(width: Responsive.w(14)),
+              Icon(Icons.science_rounded,
+                  size: Responsive.sp(13), color: AppColors.textSecondary),
+              SizedBox(width: Responsive.w(4)),
+              Text("Lab", style: TextStyle(
+                color: Colors.grey.shade700,
+                fontSize: Responsive.sp(11),
+                fontWeight: FontWeight.w500,
+              )),
+              SizedBox(width: Responsive.w(10)),
+              Expanded(
+                child: Text(
+                  "A day with both is split down the middle.",
+                  style: TextStyle(
+                    color: Colors.grey.shade600,
+                    fontSize: Responsive.sp(10.5),
+                  ),
+                ),
               ),
             ],
           ),
@@ -288,6 +247,7 @@ class _Legend extends StatelessWidget {
             borderRadius: BorderRadius.circular(
               Responsive.radius(4),
             ),
+            border: Border.all(color: Colors.grey.shade300),
           ),
         ),
 
