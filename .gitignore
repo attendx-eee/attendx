@@ -54,3 +54,7 @@ functions/.env
 worker/node_modules/
 worker/.wrangler/
 worker/.dev.vars
+
+# Presentation build script and its output — not part of the app
+build_deck.py
+AttendX-Overview.pptx
