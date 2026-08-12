@@ -14,8 +14,8 @@ class AppConfig {
   //     apkUrl: "https://`user`.github.io/`repo`/attendx-v1.2.1.apk",
   //     forceUpdate: false, notes: "What's new..." }
   // ------------------------------------------------------------------
-  static const int appVersionCode = 8;
-  static const String appVersion = '1.2.5';
+  static const int appVersionCode = 9;
+  static const String appVersion = '1.2.6';
 
   static const String appMetaCollection = 'app_meta';
   static const String appMetaDoc = 'android';

@@ -9,6 +9,7 @@ import '../admin/screens/attendance_permission_screen.dart';
 import '../admin/screens/cr_approval_screen.dart';
 import '../admin/screens/cr_directory_screen.dart';
 import '../admin/screens/profile_change_approval_screen.dart';
+import '../admin/screens/release_announce_screen.dart';
 import '../admin/screens/timetable_management_screen.dart';
 import '../attendance/models/attendance_marker.dart';
 import '../attendance/screens/student_directory_screen.dart';
@@ -125,6 +126,11 @@ class _AdminWebShellState extends State<AdminWebShell> {
       icon: Icons.calendar_month_rounded,
       label: "Timetables",
       build: () => const TimetableManagementScreen(),
+    ),
+    _Destination(
+      icon: Icons.system_update_rounded,
+      label: "Release",
+      build: () => const ReleaseAnnounceScreen(),
     ),
   ];
 

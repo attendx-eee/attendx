@@ -15,6 +15,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/section_header.dart';
 import '../../notifications/services/local_notification_service.dart';
 import '../../notifications/services/push_service.dart';
+import '../../services/update_service.dart';
 import '../../screens/face_enrollment_screen.dart';
 // ScanProfile lives here, not in the enrollment screen. Dart imports
 // aren't transitive, so importing the screen alone doesn't bring the
@@ -92,6 +93,14 @@ class _FacultyHomeState extends State<FacultyHome> {
     super.initState();
     _load();
     _loadMyTeaching();
+
+    // Faculty never saw the update prompt: the check only ran on the
+    // student dashboard, which a faculty account never reaches. They'd
+    // sit on an old build indefinitely, and an old build writes records
+    // the new one reads differently.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) UpdateService.instance.checkForUpdate(context);
+    });
 
     // Nothing scheduled faculty notifications before: the only caller
     // was the student dashboard, which a faculty account never reaches.

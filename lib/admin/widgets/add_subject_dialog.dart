@@ -75,25 +75,27 @@ class _AddSubjectDialogState extends State<AddSubjectDialog> {
                   prefixIcon: Icon(Icons.code),
                   border: OutlineInputBorder(),
                 ),
-              const SizedBox(height: 12),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return "Enter subject code";
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
               TextFormField(
                 controller: _targetController,
                 keyboardType: TextInputType.number,
                 decoration: const InputDecoration(
                   labelText: "Classes to complete",
+                  hintText: "e.g., 64",
                   helperText: "Used to track syllabus progress",
+                  prefixIcon: Icon(Icons.checklist_rtl_rounded),
                   border: OutlineInputBorder(),
                 ),
-                validator: (v) {
-                  final n = int.tryParse((v ?? '').trim());
-                  if (n == null || n <= 0) return "Enter a number";
-                  return null;
-                },
-              ),
                 validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return "Enter subject code";
-                  }
+                  final n = int.tryParse((value ?? '').trim());
+                  if (n == null || n <= 0) return "Enter a number";
                   return null;
                 },
               ),

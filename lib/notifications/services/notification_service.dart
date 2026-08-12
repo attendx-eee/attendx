@@ -137,6 +137,66 @@ class NotificationService {
     });
   }
 
+  /// Tells everyone a new version is out.
+  ///
+  /// Students and faculty both, across every year, because a release
+  /// isn't scoped to one class. Goes through the same `notifications`
+  /// collection as everything else, so the push worker picks it up and
+  /// it reaches people who haven't opened the app in a week — which is
+  /// the entire point of announcing an update rather than waiting for
+  /// them to notice the prompt at next launch.
+  ///
+  /// Returns how many were notified.
+  Future<int> announceUpdate({
+    required String version,
+    required String apkUrl,
+    String notes = '',
+  }) async {
+    final recipients = <String>[];
+
+    final students = await _firestore.collection(AccountLookup.students).get();
+    for (final doc in students.docs) {
+      if (AccountLookup.isStudentDoc(doc.data())) recipients.add(doc.id);
+    }
+
+    final faculty =
+        await _firestore.collection(AccountLookup.facultyAccounts).get();
+    recipients.addAll(faculty.docs.map((d) => d.id));
+
+    if (recipients.isEmpty) return 0;
+
+    final body = notes.trim().isEmpty
+        ? 'Version $version is available. Open AttendX to install it.'
+        : 'Version $version is available. ${notes.trim()}';
+
+    const chunkSize = 400;
+
+    for (var i = 0; i < recipients.length; i += chunkSize) {
+      final batch = _firestore.batch();
+
+      for (final uid in recipients.skip(i).take(chunkSize)) {
+        batch.set(_collection.doc(), {
+          "studentUid": uid,
+          "title": "AttendX $version is out",
+          "body": body,
+          "category": "update",
+          "priority": "high",
+          "read": false,
+          "pushed": false,
+          "createdAt": FieldValue.serverTimestamp(),
+          "action": "update",
+          // Carried so the app can offer the download straight from the
+          // notification rather than making them hunt for Settings.
+          "data": {"version": version, "apkUrl": apkUrl},
+        });
+      }
+
+      await batch.commit();
+    }
+
+    return recipients.length;
+  }
+
   /// Fan-out a notification to every student of a department + year.
   ///
   /// Used by CR timetable changes so the update instantly reaches all

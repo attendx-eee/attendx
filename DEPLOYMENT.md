@@ -189,7 +189,7 @@ fixed admin account only.
    are only worth publishing if you actually have old or emulated
    devices to support:
    ```
-   copy build\app\outputs\flutter-apk\app-arm64-v8a-release.apk docs\attendx-v1.2.5.apk
+   copy build\app\outputs\flutter-apk\app-arm64-v8a-release.apk docs\attendx-v1.2.6.apk
    ```
    Check the size before committing. If it's over ~60 MB, you built a
    fat APK by mistake — rebuild with the flag.
@@ -213,9 +213,9 @@ Create/update the Firestore document **`app_meta/android`**:
 
 | Field               | Type    | Example                                              |
 |---------------------|---------|------------------------------------------------------|
-| `latestVersionCode` | number  | `8`  (must be > the code users currently have)       |
-| `latestVersion`     | string  | `"1.2.5"`                                            |
-| `apkUrl`            | string  | `"https://attendx-eee.github.io/attendx/attendx-v1.2.5.apk"` |
+| `latestVersionCode` | number  | `9`  (must be > the code users currently have)       |
+| `latestVersion`     | string  | `"1.2.6"`                                            |
+| `apkUrl`            | string  | `"https://attendx-eee.github.io/attendx/attendx-v1.2.6.apk"` |
 | `forceUpdate`       | boolean | `false` (set `true` to block old versions entirely)  |
 | `notes`             | string  | `"CR batch labs + daily digest notifications"`       |
 
@@ -224,7 +224,7 @@ dialog with an **Update Now** button that downloads the new APK from
 your site. With `forceUpdate: true` the dialog cannot be dismissed.
 
 > **`apkUrl` must include the version in the filename.** The APKs in
-> `docs/` are named `attendx-v1.2.5.apk`, not `attendx.apk` — the app
+> `docs/` are named `attendx-v1.2.6.apk`, not `attendx.apk` — the app
 > opens this string verbatim, so a filename that doesn't exist gives
 > everyone a 404 on the Update button.
 >
