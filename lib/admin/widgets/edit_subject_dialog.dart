@@ -19,6 +19,9 @@ class _EditSubjectDialogState extends State<EditSubjectDialog> {
   late TextEditingController _nameController;
   late TextEditingController _codeController;
 
+  /// Classes the syllabus is planned around.
+  late TextEditingController _targetController;
+
   late int _selectedYear;
   late String _selectedSemester;
 
@@ -27,6 +30,8 @@ class _EditSubjectDialogState extends State<EditSubjectDialog> {
     super.initState();
     _nameController = TextEditingController(text: widget.subject.name);
     _codeController = TextEditingController(text: widget.subject.code);
+    _targetController = TextEditingController(
+        text: widget.subject.targetClasses.toString());
     _selectedYear = widget.subject.year;
     _selectedSemester = widget.subject.semester;
   }
@@ -35,6 +40,7 @@ class _EditSubjectDialogState extends State<EditSubjectDialog> {
   void dispose() {
     _nameController.dispose();
     _codeController.dispose();
+    _targetController.dispose();
     super.dispose();
   }
 
@@ -78,6 +84,21 @@ class _EditSubjectDialogState extends State<EditSubjectDialog> {
                   prefixIcon: Icon(Icons.code),
                   border: OutlineInputBorder(),
                 ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _targetController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: "Classes to complete",
+                  helperText: "Used to track syllabus progress",
+                  border: OutlineInputBorder(),
+                ),
+                validator: (v) {
+                  final n = int.tryParse((v ?? '').trim());
+                  if (n == null || n <= 0) return "Enter a number";
+                  return null;
+                },
+              ),
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
                     return "Enter subject code";
@@ -139,6 +160,9 @@ class _EditSubjectDialogState extends State<EditSubjectDialog> {
               code: _codeController.text.trim().toUpperCase(),
               year: _selectedYear,
               semester: _selectedSemester,
+              targetClasses:
+                  int.tryParse(_targetController.text.trim()) ??
+                      SubjectModel.defaultTarget,
             );
 
             await MasterDataService.instance.updateSubject(subject);

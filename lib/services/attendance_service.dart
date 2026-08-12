@@ -7,6 +7,7 @@ import '../admin/services/timetable_service.dart';
 import '../attendance/models/manual_attendance_model.dart';
 import '../attendance/services/manual_attendance_service.dart';
 import '../core/constants/app_config.dart';
+import '../timetable/services/schedule_resolver.dart';
 
 /// Attendance derived from Raspberry Pi check-in/check-out events.
 ///
@@ -91,7 +92,10 @@ class AttendanceService {
   /// Drops the cached timetables. Called after the holiday calendar or
   /// the timetable itself changes, so the next read reflects it instead
   /// of serving whatever was true when the screen opened.
-  void clearScheduleCache() => _scheduleCache.clear();
+  void clearScheduleCache() {
+    _scheduleCache.clear();
+    ScheduleResolver.instance.clearCache();
+  }
 
   /// Today's raw event doc for the student (feeds the dashboard card).
   Future<DocumentSnapshot<Map<String, dynamic>>> todayEvent(String uid) {
@@ -121,21 +125,42 @@ class AttendanceService {
 
     final key = '$department|$year|$weekday';
     final cached = _scheduleCache[key];
-    if (cached != null) return cached;
 
     try {
-      final all = await TimetableService.instance.getDaySchedule(
+      final List<PeriodModel> periods;
+
+      if (cached != null) {
+        periods = cached;
+      } else {
+        final all = await TimetableService.instance.getDaySchedule(
+          department: department,
+          academicYear: AppConfig.academicYear,
+          year: year,
+          day: weekday,
+        );
+
+        periods =
+            all.where((p) => !p.isFree && p.subject.isNotEmpty).toList();
+
+        _scheduleCache[key] = periods;
+      }
+
+      // The weekly grid is what *usually* happens. When a specific date
+      // is in play, the day's overrides decide what actually happened:
+      // a cancelled class stops counting against everybody, and a class
+      // the CR added in a free period starts counting for everybody.
+      //
+      // Only cached by weekday above, never by date — overrides belong
+      // to one date and caching them under the weekday would apply
+      // Tuesday's cancellation to every Tuesday of the term.
+      if (on == null) return periods;
+
+      return ScheduleResolver.instance.resolve(
         department: department,
-        academicYear: AppConfig.academicYear,
         year: year,
-        day: weekday,
+        date: on,
+        base: periods,
       );
-
-      final periods =
-          all.where((p) => !p.isFree && p.subject.isNotEmpty).toList();
-
-      _scheduleCache[key] = periods;
-      return periods;
     } catch (e) {
       // Deliberately not cached. A failed read used to be stored as an
       // empty timetable, so one dropped request made the whole day look

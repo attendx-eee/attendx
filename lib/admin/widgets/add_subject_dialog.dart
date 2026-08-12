@@ -19,6 +19,11 @@ class _AddSubjectDialogState extends State<AddSubjectDialog> {
   final _nameController = TextEditingController();
   final _codeController = TextEditingController();
 
+  /// Classes the syllabus is planned around. Pre-filled with the usual
+  /// figure so nobody has to think about it for the common case.
+  final _targetController = TextEditingController(
+      text: '${SubjectModel.defaultTarget}');
+
   late int _selectedYear = widget.initialYear ?? 1;
   String _selectedSemester = "Odd";
 
@@ -26,6 +31,7 @@ class _AddSubjectDialogState extends State<AddSubjectDialog> {
   void dispose() {
     _nameController.dispose();
     _codeController.dispose();
+    _targetController.dispose();
     super.dispose();
   }
 
@@ -69,6 +75,21 @@ class _AddSubjectDialogState extends State<AddSubjectDialog> {
                   prefixIcon: Icon(Icons.code),
                   border: OutlineInputBorder(),
                 ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _targetController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: "Classes to complete",
+                  helperText: "Used to track syllabus progress",
+                  border: OutlineInputBorder(),
+                ),
+                validator: (v) {
+                  final n = int.tryParse((v ?? '').trim());
+                  if (n == null || n <= 0) return "Enter a number";
+                  return null;
+                },
+              ),
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
                     return "Enter subject code";
@@ -130,6 +151,9 @@ class _AddSubjectDialogState extends State<AddSubjectDialog> {
               code: _codeController.text.trim().toUpperCase(),
               year: _selectedYear,
               semester: _selectedSemester,
+              targetClasses:
+                  int.tryParse(_targetController.text.trim()) ??
+                      SubjectModel.defaultTarget,
             );
 
             await MasterDataService.instance.addSubject(subject);

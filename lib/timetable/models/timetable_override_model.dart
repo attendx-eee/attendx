@@ -8,6 +8,17 @@ class OverrideType {
   static const replacement = 'replacement';
   static const roomChange = 'room_change';
 
+  /// A class put into a period the year has free.
+  ///
+  /// Every subject has to fit a fixed number of classes into the term,
+  /// and days get lost to holidays, exams and staff absence. The usual
+  /// remedy is to hold the missed class in a free period, agreed on the
+  /// day. This is that: a one-off class on one date, in a slot the
+  /// master timetable leaves empty, at a time the CR types in rather
+  /// than picks from the standard grid — because a period borrowed at
+  /// short notice rarely lines up with the bells.
+  static const extraClass = 'extra_class';
+
   static String label(String type) {
     switch (type) {
       case cancelled:
@@ -16,6 +27,8 @@ class OverrideType {
         return 'REPLACEMENT';
       case roomChange:
         return 'ROOM CHANGE';
+      case extraClass:
+        return 'EXTRA CLASS';
       default:
         return type.toUpperCase();
     }
@@ -56,6 +69,12 @@ class TimetableOverride {
   /// in the message.
   final String batch;
 
+  /// 'Theory' or 'Lab'. Only meaningful for [OverrideType.extraClass],
+  /// where there is no master period to inherit it from — and it has to
+  /// be right, because it decides whether the class is worth
+  /// ClassWeight.lab or ClassWeight.theory.
+  final String classType;
+
   final String note;
 
   final String createdBy;
@@ -80,6 +99,7 @@ class TimetableOverride {
     this.newFacultyName = '',
     this.newRoom = '',
     this.batch = '',
+    this.classType = 'Theory',
     this.note = '',
     required this.createdBy,
     required this.createdByName,
@@ -118,6 +138,7 @@ class TimetableOverride {
       newFacultyName: json['newFacultyName'] ?? '',
       newRoom: json['newRoom'] ?? '',
       batch: json['batch'] ?? '',
+      classType: json['classType'] ?? 'Theory',
       note: json['note'] ?? '',
       createdBy: json['createdBy'] ?? '',
       createdByName: json['createdByName'] ?? '',
@@ -143,6 +164,7 @@ class TimetableOverride {
       'newFacultyName': newFacultyName,
       'newRoom': newRoom,
       'batch': batch,
+      'classType': classType,
       'note': note,
       'createdBy': createdBy,
       'createdByName': createdByName,

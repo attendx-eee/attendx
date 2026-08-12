@@ -17,6 +17,8 @@ import '../core/widgets/primary_card.dart';
 import '../core/widgets/section_header.dart';
 import '../core/widgets/status_chip.dart';
 import '../timetable/models/timetable_override_model.dart';
+import '../services/attendance_service.dart';
+import 'extra_class_sheet.dart';
 import '../timetable/services/timetable_override_service.dart';
 
 /// Where a period sits relative to the CR's edit window.
@@ -194,6 +196,35 @@ class _CrTimetableScreenState extends State<CrTimetableScreen> {
       _basePeriods = periods;
       _loading = false;
     });
+  }
+
+  /// Books a class into a free period on the selected date.
+  ///
+  /// The counterpart to cancelling. A subject has a fixed number of
+  /// classes to get through and days keep disappearing to holidays and
+  /// exams, so the lost ones get held in whatever period is free — and
+  /// the CR is the one who knows which those are and which lecturer has
+  /// agreed to come.
+  Future<void> _addExtraClass() async {
+    final user = FirebaseAuth.instance.currentUser;
+
+    final override = await ExtraClassSheet.show(
+      context: context,
+      department: _department,
+      year: _year,
+      date: _selectedDate,
+      basePeriods: _basePeriods,
+      crUid: user?.uid ?? '',
+      crName: (widget.studentData['name'] ?? 'CR').toString(),
+    );
+
+    if (override == null) return;
+
+    await _apply(override);
+
+    // The resolver caches by date, and it has just changed.
+    AttendanceService.instance.clearScheduleCache();
+    if (mounted) _loadBaseSchedule();
   }
 
   Future<void> _apply(TimetableOverride override) async {
@@ -786,6 +817,13 @@ class _CrTimetableScreenState extends State<CrTimetableScreen> {
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         elevation: 0,
+        actions: [
+          IconButton(
+            tooltip: 'Add an extra class',
+            onPressed: _saving ? null : _addExtraClass,
+            icon: const Icon(Icons.add_circle_outline_rounded),
+          ),
+        ],
       ),
       body: Column(
         children: [

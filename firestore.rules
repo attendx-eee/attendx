@@ -338,9 +338,19 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Cancellations, replacements, room changes and extra classes. A CR
+    // may write them for their own year only — these now feed straight
+    // into attendance, so a CR who could edit another year's timetable
+    // could move that year's percentages.
     match /timetable_overrides/{id} {
       allow read: if signedIn();
-      allow write: if isAdmin() || isCr();
+
+      allow create, update: if isAdmin()
+        || (isCr()
+            && string(request.resource.data.year) == string(myYear()));
+
+      allow delete: if isAdmin()
+        || (isCr() && string(resource.data.year) == string(myYear()));
     }
 
     // ---------- reference data managed by admins ----------

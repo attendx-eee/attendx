@@ -7,6 +7,7 @@ import '../../core/constants/app_config.dart';
 import '../../faculty/models/period_attendance.dart';
 import '../../faculty/services/period_attendance_service.dart';
 import '../../services/attendance_service.dart';
+import '../../timetable/services/schedule_resolver.dart';
 import '../models/day_summary.dart';
 
 /// The single place a student's attendance figures are computed.
@@ -44,6 +45,7 @@ class SemesterTotalsService {
   void clearCache() {
     _monthCache.clear();
     _scheduleCache.clear();
+    ScheduleResolver.instance.clearCache();
   }
 
   /// Every month from the semester's start to the current one.
@@ -148,6 +150,16 @@ class SemesterTotalsService {
         byDate.putIfAbsent(r.date, () => {})[r.periodNo] = r;
       }
 
+      // One query for the month's cancellations and extra classes,
+      // rather than one per day. Without this a cancelled class still
+      // counts against the whole year, and a class the CR added in a
+      // free period counts for nobody.
+      final overrides = await ScheduleResolver.instance.preloadMonth(
+        department: department,
+        year: year,
+        month: month,
+      );
+
       final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
 
       for (var d = 1; d <= daysInMonth; d++) {
@@ -160,10 +172,15 @@ class SemesterTotalsService {
           continue;
         }
 
-        final periods = await _scheduleFor(
+        final base = await _scheduleFor(
           department: department,
           year: year,
           weekday: AppConfig.dayName(date),
+        );
+
+        final periods = ScheduleResolver.apply(
+          base: base,
+          overrides: overrides[AppConfig.dateId(date)] ?? const [],
         );
 
         if (periods.isEmpty) continue;
@@ -179,6 +196,46 @@ class SemesterTotalsService {
     }
 
     return totals;
+  }
+
+  /// How many classes each subject has actually held this semester.
+  ///
+  /// Counted from the registers, not the timetable: the question is
+  /// whether the syllabus will finish, and a class that was scheduled
+  /// but never held does not move a subject any closer to done.
+  ///
+  /// Keyed by subject name, because that is what the timetable and the
+  /// period records both carry — subject *ids* only exist in master
+  /// data and never made it onto a period.
+  Future<Map<String, int>> heldBySubject({
+    required String department,
+    required int year,
+    List<DateTime>? months,
+  }) async {
+    final held = <String, int>{};
+
+    for (final month in months ?? semesterMonths()) {
+      final records = await _recordsFor(
+        department: department,
+        year: year,
+        month: month,
+      );
+
+      // A lab split across batches is registered once per batch, and
+      // that is one class taught twice, not two classes of syllabus.
+      // Counting distinct date+period slots collapses them.
+      final seen = <String, Set<String>>{};
+      for (final r in records) {
+        if (r.subject.isEmpty) continue;
+        seen.putIfAbsent(r.subject, () => {}).add('${r.date}|${r.periodNo}');
+      }
+
+      seen.forEach((subject, slots) {
+        held[subject] = (held[subject] ?? 0) + slots.length;
+      });
+    }
+
+    return held;
   }
 
   /// Totals for a whole year group, computed from one shared fetch.

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../admin/models/period_model.dart';
 import '../../admin/services/timetable_service.dart';
 import '../../admin/widgets/master_tile.dart';
+import '../../admin/widgets/syllabus_progress_card.dart';
 import '../../core/auth/account_lookup.dart';
 import '../../core/constants/app_config.dart';
 import '../../core/responsive/responsive.dart';
@@ -58,6 +59,12 @@ class _FacultyHomeState extends State<FacultyHome> {
   String? _error;
   List<_TodayPeriod> _today = const [];
 
+  /// Years and subjects this lecturer actually teaches, gathered while
+  /// their week is assembled. Used to narrow the syllabus card to their
+  /// own subjects rather than the whole year's.
+  Set<int> _myYears = const {};
+  Set<String> _mySubjects = const {};
+
   /// The live account, re-read on every refresh.
   ///
   /// The one passed in was resolved once, when RoleRouter built this
@@ -84,6 +91,7 @@ class _FacultyHomeState extends State<FacultyHome> {
   void initState() {
     super.initState();
     _load();
+    _loadMyTeaching();
 
     // Nothing scheduled faculty notifications before: the only caller
     // was the student dashboard, which a faculty account never reaches.
@@ -301,6 +309,19 @@ class _FacultyHomeState extends State<FacultyHome> {
 
     mine.sort((a, b) => a.period.subject.compareTo(b.period.subject));
     return mine;
+  }
+
+  /// Fills [_myYears] and [_mySubjects] from the whole week, so the
+  /// syllabus card shows this lecturer's subjects rather than every
+  /// subject the year takes.
+  Future<void> _loadMyTeaching() async {
+    final mine = await _allMyPeriodsThisWeek();
+    if (!mounted || mine.isEmpty) return;
+
+    setState(() {
+      _myYears = mine.map((e) => e.year).toSet();
+      _mySubjects = mine.map((e) => e.period.subject).toSet();
+    });
   }
 
   Future<void> _openScan(_TodayPeriod entry) async {
@@ -598,6 +619,26 @@ class _FacultyHomeState extends State<FacultyHome> {
                 record: _marked['${entry.year}:${entry.period.periodNo}'],
                 onTap: () => _openScan(entry),
               )),
+
+        // How much of each subject's syllabus is actually done.
+        //
+        // A term is planned around a fixed number of classes and days
+        // keep going to holidays and exams, so the shortfall is usually
+        // discovered in the last fortnight when nothing can be done
+        // about it. Shown here, on the screen a lecturer opens daily,
+        // it becomes an October decision instead — and the CR can book
+        // the extra classes into free periods.
+        if (_myYears.isNotEmpty) ...[
+          SizedBox(height: Responsive.h(20)),
+          for (final year in _myYears) ...[
+            SyllabusProgressCard(
+              department: AppConfig.department,
+              year: year,
+              onlySubjects: _mySubjects,
+            ),
+            SizedBox(height: Responsive.h(14)),
+          ],
+        ],
 
         // Only shown when there's no face on file. Once it's set up,
         // re-scanning is a Settings concern rather than something the
