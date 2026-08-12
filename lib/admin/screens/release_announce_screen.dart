@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../../core/constants/app_config.dart';
 import '../../core/responsive/responsive.dart';
@@ -73,6 +74,42 @@ class _ReleaseAnnounceScreenState extends State<ReleaseAnnounceScreen> {
     if (mounted) setState(() => _loading = false);
   }
 
+  /// Checks the APK link actually resolves before anything is
+  /// announced.
+  ///
+  /// The failure this exists for: the metadata still names an old host
+  /// or an old filename, so every phone that taps "Update now" gets a
+  /// 404 — and nobody finds out until a student says so. A HEAD request
+  /// costs nothing and catches it here.
+  ///
+  /// A network or CORS failure is reported as "couldn't check", not as
+  /// broken. GitHub Pages doesn't always send CORS headers a browser
+  /// will accept, and blocking a good release on an inconclusive probe
+  /// would be worse than the problem.
+  Future<String?> _checkLink(String url) async {
+    try {
+      final response = await http
+          .head(Uri.parse(url))
+          .timeout(const Duration(seconds: 8));
+
+      if (response.statusCode == 404) {
+        return 'That link returns 404 — the APK is not on the site yet. '
+            'Upload it, wait for the Pages deploy to finish, then '
+            'publish.';
+      }
+
+      if (response.statusCode >= 400) {
+        return 'That link returned ${response.statusCode}. Check it '
+            'opens in a browser before announcing it.';
+      }
+
+      return null;
+    } catch (e) {
+      // Inconclusive, not failed.
+      return '';
+    }
+  }
+
   Future<void> _publish({required bool announce}) async {
     final version = _version.text.trim();
     final code = int.tryParse(_versionCode.text.trim());
@@ -91,6 +128,19 @@ class _ReleaseAnnounceScreenState extends State<ReleaseAnnounceScreen> {
       _status = null;
       _failed = false;
     });
+
+    final linkProblem = await _checkLink(url);
+
+    if (linkProblem != null && linkProblem.isNotEmpty) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _failed = true;
+          _status = linkProblem;
+        });
+      }
+      return;
+    }
 
     try {
       await FirebaseFirestore.instance
