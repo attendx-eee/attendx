@@ -64,6 +64,59 @@ enum AnalysisSort {
       };
 }
 
+/// Which of the three percentages the screen is answering with.
+///
+/// All three are always computed and all three are always on the row —
+/// this only decides which one gets the big number, drives the class
+/// average, and decides who counts as short. A lab-heavy year can sit
+/// comfortably above 75% overall while half the class is short on labs
+/// alone, and that is exactly the case the department needs to be able
+/// to ask about directly rather than infer from a combined figure.
+enum AnalysisMetric {
+  overall,
+  theory,
+  lab;
+
+  String get label => switch (this) {
+        AnalysisMetric.overall => 'Overall attendance',
+        AnalysisMetric.theory => 'Theory classes',
+        AnalysisMetric.lab => 'Labs',
+      };
+
+  /// The caption under the big number, where there is no room for more.
+  String get shortLabel => switch (this) {
+        AnalysisMetric.overall => 'Overall',
+        AnalysisMetric.theory => 'Theory',
+        AnalysisMetric.lab => 'Lab',
+      };
+
+  double percentOf(AttendanceTotals t) => switch (this) {
+        AnalysisMetric.overall => t.overallPercent,
+        AnalysisMetric.theory => t.theoryPercent,
+        AnalysisMetric.lab => t.labPercent,
+      };
+
+  /// Classes held under this metric. Zero means there is no percentage
+  /// to show — a year with no labs yet must read "--", not 0%.
+  int heldOf(AttendanceTotals t) => switch (this) {
+        AnalysisMetric.overall => t.held,
+        AnalysisMetric.theory => t.theoryHeld,
+        AnalysisMetric.lab => t.labHeld,
+      };
+
+  int attendedOf(AttendanceTotals t) => switch (this) {
+        AnalysisMetric.overall => t.attended,
+        AnalysisMetric.theory => t.theoryAttended,
+        AnalysisMetric.lab => t.labAttended,
+      };
+
+  bool isShort(AttendanceTotals t) => switch (this) {
+        AnalysisMetric.overall => t.isShortOverall,
+        AnalysisMetric.theory => t.isShortTheory,
+        AnalysisMetric.lab => t.isShortLab,
+      };
+}
+
 /// One student's row, backed entirely by [AttendanceTotals].
 ///
 /// The row holds no arithmetic of its own. It used to count present and
@@ -93,9 +146,6 @@ class _Row {
   double get percent => totals.overallPercent;
   double get theoryPercent => totals.theoryPercent;
   double get labPercent => totals.labPercent;
-
-  /// The conventional attendance bar in Indian engineering colleges.
-  bool get isShort => totals.isShortOverall;
 }
 
 /// Admin-only: attendance for a chosen month and B.Tech year.
@@ -117,19 +167,46 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
     'July', 'August', 'September', 'October', 'November', 'December',
   ];
 
-  late DateTime _month = () {
+  /// The "all months" entry in the month dropdown.
+  ///
+  /// A sentinel rather than a second dropdown: a month and a scope are
+  /// one decision, and having them as two controls meant you could set
+  /// the month to March and still be looking at the whole semester,
+  /// which read as a bug every time.
+  static final DateTime _allMonths = DateTime(0);
+
+  /// Defaults to the last month that has actually finished.
+  ///
+  /// The current month is nearly always the wrong thing to open on: on
+  /// the 3rd it is four classes deep and every percentage in it is
+  /// noise. The month just gone is complete, which is what anyone
+  /// reviewing attendance is asking about.
+  late DateTime _month = _defaultMonth();
+
+  static DateTime _defaultMonth() {
     final now = DateTime.now();
-    return DateTime(now.year, now.month);
-  }();
+    final previous = DateTime(now.year, now.month - 1);
+
+    final start = AttendanceService.instance.semesterStart();
+    final firstMonth = DateTime(start.year, start.month);
+
+    // A semester in its first month has no completed month to show.
+    if (previous.isBefore(firstMonth)) return DateTime(now.year, now.month);
+
+    return previous;
+  }
 
   int _year = 1;
   AnalysisSort _sort = AnalysisSort.regNoAsc;
 
-  /// False = the selected month, true = everything since the semester
-  /// began. Attendance rules are applied to the semester, so that is the
-  /// figure that decides eligibility; the month view is for spotting a
-  /// bad patch early.
-  bool _wholeSemester = true;
+  /// Which percentage the screen leads with.
+  AnalysisMetric _metric = AnalysisMetric.overall;
+
+  /// Everything since the semester began, rather than one month.
+  /// Attendance rules are applied to the semester, so that is the figure
+  /// that decides eligibility; the month view is for spotting a bad
+  /// patch early.
+  bool get _wholeSemester => _month == _allMonths;
 
   bool _loading = true;
   bool _exporting = false;
@@ -164,7 +241,26 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
   String _labelFor(DateTime month) =>
       '${_monthNames[month.month - 1]} ${month.year}';
 
-  String get _monthLabel => _labelFor(_month);
+  String get _monthLabel =>
+      _wholeSemester ? 'Semester to date' : _labelFor(_selectedMonth);
+
+  /// Newest month first, with the whole-semester entry pinned on top.
+  Map<DateTime, String> get _monthItems => {
+        _allMonths: 'All months (semester to date)',
+        for (final m in _selectableMonths.reversed) m: _labelFor(m),
+      };
+
+  /// The dropdown needs a value that is identical to one of its items,
+  /// and a stored month can fall outside the window when the semester
+  /// dates change under it.
+  DateTime get _selectedMonth {
+    if (_wholeSemester) return _allMonths;
+
+    final match = _selectableMonths.where(
+        (m) => m.year == _month.year && m.month == _month.month);
+
+    return match.isEmpty ? _selectableMonths.last : match.first;
+  }
 
   Future<void> _load() async {
     setState(() {
@@ -194,10 +290,13 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
         for (final doc in students) doc.id: doc.data(),
       };
 
-      // The window: this month only, or the whole semester to date.
+      // The window: one month, or the whole semester to date.
+      // `_selectedMonth` rather than `_month` so the figures always
+      // match the month the dropdown is showing, even if a stored month
+      // has fallen outside the semester window.
       final months = _wholeSemester
           ? SemesterTotalsService.instance.semesterMonths()
-          : [_month];
+          : [_selectedMonth];
 
       final totals = await SemesterTotalsService.instance.forGroup(
         students: byUid,
@@ -297,14 +396,31 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
     return rows;
   }
 
-  double get _classAverage {
-    final counted = _rows.where((r) => r.held > 0).toList();
+  /// The class average for one metric.
+  ///
+  /// Averaged over the students who have something held under that
+  /// metric, not over everybody. Including a student with no labs yet as
+  /// a 0% would make the lab average a statement about enrolment rather
+  /// than about attendance.
+  double _averageOf(AnalysisMetric metric) {
+    final counted =
+        _rows.where((r) => metric.heldOf(r.totals) > 0).toList();
     if (counted.isEmpty) return 0;
-    return counted.map((r) => r.percent).reduce((a, b) => a + b) /
+
+    return counted
+            .map((r) => metric.percentOf(r.totals))
+            .reduce((a, b) => a + b) /
         counted.length;
   }
 
-  int get _shortCount => _rows.where((r) => r.isShort).length;
+  double get _classAverage => _averageOf(_metric);
+
+  /// Short under the metric currently being shown, and only counting
+  /// students the metric actually applies to.
+  int get _shortCount => _rows
+      .where((r) =>
+          _metric.heldOf(r.totals) > 0 && _metric.isShort(r.totals))
+      .length;
 
   Future<void> _exportPdf() async {
     setState(() => _exporting = true);
@@ -335,6 +451,12 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
               ),
               pw.SizedBox(height: 4),
               pw.Text(
+                'Reported on: ${_metric.label}',
+                style:
+                    const pw.TextStyle(fontSize: 11, color: PdfColors.grey800),
+              ),
+              pw.SizedBox(height: 4),
+              pw.Text(
                 '${AppConfig.department} | ${AppConfig.academicYear} | '
                 'sorted by ${_sort.pdfLabel}',
                 style:
@@ -342,8 +464,14 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
               ),
               pw.SizedBox(height: 2),
               pw.Text(
-                'Class average ${_classAverage.toStringAsFixed(1)}% | '
-                '$_shortCount of ${rows.length} below 75% | '
+                'Overall ${_averageOf(AnalysisMetric.overall)
+                    .toStringAsFixed(1)}% | '
+                'Theory ${_averageOf(AnalysisMetric.theory)
+                    .toStringAsFixed(1)}% | '
+                'Lab ${_averageOf(AnalysisMetric.lab)
+                    .toStringAsFixed(1)}% | '
+                '$_shortCount of ${rows.length} below 75% on '
+                '${_metric.shortLabel.toLowerCase()} | '
                 'lab counts ${ClassWeight.lab}, theory '
                 '${ClassWeight.theory}',
                 style:
@@ -412,9 +540,11 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
         bytes: await doc.save(),
         filename:
             _wholeSemester
-                ? 'attendance_year${_year}_semester.pdf'
-                : 'attendance_year${_year}_${_month.year}-'
-                    '${_month.month.toString().padLeft(2, '0')}.pdf',
+                ? 'attendance_year${_year}_semester_'
+                    '${_metric.shortLabel.toLowerCase()}.pdf'
+                : 'attendance_year${_year}_${_selectedMonth.year}-'
+                    '${_selectedMonth.month.toString().padLeft(2, '0')}_'
+                    '${_metric.shortLabel.toLowerCase()}.pdf',
       );
     } catch (e) {
       if (mounted) {
@@ -513,15 +643,8 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
                 child: _Dropdown<DateTime>(
                   label: "Month",
                   icon: Icons.calendar_month_outlined,
-                  value: _selectableMonths.any((m) =>
-                          m.year == _month.year && m.month == _month.month)
-                      ? _selectableMonths.firstWhere((m) =>
-                          m.year == _month.year && m.month == _month.month)
-                      : _selectableMonths.last,
-                  items: {
-                    for (final m in _selectableMonths.reversed)
-                      m: _labelFor(m),
-                  },
+                  value: _selectedMonth,
+                  items: _monthItems,
                   onChanged: (m) {
                     if (m == null) return;
                     setState(() => _month = m);
@@ -570,18 +693,18 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
               SizedBox(width: Responsive.w(12)),
               Expanded(
                 flex: 2,
-                child: _Dropdown<bool>(
-                  label: "Period",
-                  icon: Icons.date_range_rounded,
-                  value: _wholeSemester,
-                  items: const {
-                    true: "Whole semester",
-                    false: "Selected month",
+                child: _Dropdown<AnalysisMetric>(
+                  label: "Show",
+                  icon: Icons.insights_rounded,
+                  value: _metric,
+                  items: {
+                    for (final m in AnalysisMetric.values) m: m.label,
                   },
-                  onChanged: (v) {
-                    if (v == null) return;
-                    setState(() => _wholeSemester = v);
-                    _load();
+                  // No reload: all three are already computed, so this
+                  // only changes which one is being led with.
+                  onChanged: (m) {
+                    if (m == null) return;
+                    setState(() => _metric = m);
                   },
                 ),
               ),
@@ -590,12 +713,13 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
           SizedBox(height: Responsive.h(8)),
           Text(
             _wholeSemester
-                ? 'Semester to date. A lab counts '
+                ? 'Everything since the semester began. A lab counts '
                     '${ClassWeight.lab}, a theory class '
                     '${ClassWeight.theory}; percentages are over classes '
                     'actually held, not the whole timetable.'
-                : 'Selected month only. Eligibility is judged on the '
-                    'semester, so switch back before deciding anything.',
+                : '$_monthLabel only. Eligibility is judged on the whole '
+                    'semester, so switch the month to "All months" before '
+                    'deciding anything.',
             style: AppTextStyles.caption,
           ),
         ],
@@ -663,6 +787,7 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
         return _StudentRow(
           row: rows[index - 2],
           rank: index - 1,
+          metric: _metric,
           onTap: () => _openStudent(rows[index - 2]),
         );
       },
@@ -695,18 +820,43 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
               ),
               _Metric(
                 value: "${_classAverage.toStringAsFixed(1)}%",
-                label: "Class average",
+                label: "${_metric.shortLabel} average",
                 color: _classAverage >= 75
                     ? AppColors.success
                     : AppColors.warning,
               ),
               _Metric(
                 value: "$_shortCount",
-                label: "Below 75%",
+                label: "${_metric.shortLabel} below 75%",
                 color: _shortCount == 0
                     ? AppColors.success
                     : AppColors.danger,
               ),
+            ],
+          ),
+
+          // All three averages, always. The dropdown decides what the
+          // screen leads with, but a HOD comparing lab attendance to
+          // theory should not have to change a filter and re-read the
+          // page to do it.
+          SizedBox(height: Responsive.h(14)),
+          const Divider(height: 1, color: AppColors.divider),
+          SizedBox(height: Responsive.h(12)),
+          Row(
+            children: [
+              for (final m in AnalysisMetric.values) ...[
+                Expanded(
+                  child: _AverageChip(
+                    label: m.shortLabel,
+                    percent: _averageOf(m),
+                    hasData: _rows.any((r) => m.heldOf(r.totals) > 0),
+                    selected: m == _metric,
+                    onTap: () => setState(() => _metric = m),
+                  ),
+                ),
+                if (m != AnalysisMetric.values.last)
+                  SizedBox(width: Responsive.w(8)),
+              ],
             ],
           ),
         ],
@@ -727,13 +877,13 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
           ),
           Expanded(
             flex: 3,
-            child: Text("P / A / L",
+            child: Text("THEORY / LAB",
                 textAlign: TextAlign.center, style: _headerStyle),
           ),
           SizedBox(
-            width: Responsive.w(58),
-            child:
-                Text("%", textAlign: TextAlign.right, style: _headerStyle),
+            width: Responsive.w(64),
+            child: Text(_metric.shortLabel.toUpperCase(),
+                textAlign: TextAlign.right, style: _headerStyle),
           ),
         ],
       ),
@@ -753,18 +903,23 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
 class _StudentRow extends StatelessWidget {
   final _Row row;
   final int rank;
+  final AnalysisMetric metric;
   final VoidCallback onTap;
 
   const _StudentRow({
     required this.row,
     required this.rank,
+    required this.metric,
     required this.onTap,
   });
 
+  int get _held => metric.heldOf(row.totals);
+  double get _percent => metric.percentOf(row.totals);
+
   Color get _percentColor {
-    if (row.held == 0) return AppColors.textSecondary;
-    if (row.percent >= 75) return AppColors.success;
-    if (row.percent >= 65) return AppColors.warning;
+    if (_held == 0) return AppColors.textSecondary;
+    if (_percent >= 75) return AppColors.success;
+    if (_percent >= 65) return AppColors.warning;
     return AppColors.danger;
   }
 
@@ -778,7 +933,10 @@ class _StudentRow extends StatelessWidget {
           BoxShadow(
               color: AppColors.shadow, blurRadius: 10, offset: Offset(0, 4)),
         ],
-        border: row.isShort
+        // Outlined on the metric being shown, so switching to Labs
+        // highlights the students who are short on labs rather than
+        // leaving the overall outlines behind.
+        border: _held > 0 && metric.isShort(row.totals)
             ? Border.all(color: AppColors.danger.withValues(alpha: .35))
             : null,
       ),
@@ -867,17 +1025,36 @@ class _StudentRow extends StatelessWidget {
                   ),
                 ),
                 SizedBox(
-                  width: Responsive.w(58),
-                  child: Text(
-                    row.held == 0
-                        ? "--"
-                        : "${row.percent.toStringAsFixed(0)}%",
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      fontSize: Responsive.sp(15),
-                      fontWeight: FontWeight.w800,
-                      color: _percentColor,
-                    ),
+                  width: Responsive.w(64),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _held == 0
+                            ? "--"
+                            : "${_percent.toStringAsFixed(0)}%",
+                        textAlign: TextAlign.right,
+                        style: TextStyle(
+                          fontSize: Responsive.sp(15),
+                          fontWeight: FontWeight.w800,
+                          color: _percentColor,
+                        ),
+                      ),
+                      // The fraction behind the percentage. 3 out of 4
+                      // and 30 out of 40 are both 75%, and only one of
+                      // them is worth acting on this week.
+                      Text(
+                        _held == 0
+                            ? "none held"
+                            : "${metric.attendedOf(row.totals)}/$_held",
+                        textAlign: TextAlign.right,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTextStyles.caption
+                            .copyWith(fontSize: Responsive.sp(9.5)),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -961,6 +1138,85 @@ class _Dropdown<T> extends StatelessWidget {
               ))
           .toList(),
       onChanged: onChanged,
+    );
+  }
+}
+
+/// One of the three class averages in the summary card.
+///
+/// Tappable, because having read "Lab 58%" the next thing anyone wants
+/// is the list ordered by it, and reaching for the dropdown to do that
+/// is a step nobody should have to find.
+class _AverageChip extends StatelessWidget {
+  final String label;
+  final double percent;
+  final bool hasData;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _AverageChip({
+    required this.label,
+    required this.percent,
+    required this.hasData,
+    required this.selected,
+    required this.onTap,
+  });
+
+  Color get _colour {
+    if (!hasData) return AppColors.textSecondary;
+    if (percent >= 75) return AppColors.success;
+    if (percent >= 65) return AppColors.warning;
+    return AppColors.danger;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: selected
+          ? AppColors.primary.withValues(alpha: .08)
+          : Colors.transparent,
+      borderRadius: BorderRadius.circular(AppRadius.sm),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        onTap: onTap,
+        child: Container(
+          padding: Responsive.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppRadius.sm),
+            border: Border.all(
+              color: selected ? AppColors.primary : AppColors.divider,
+              width: selected ? 1.4 : 1,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTextStyles.caption.copyWith(
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: selected
+                      ? AppColors.primary
+                      : AppColors.textSecondary,
+                ),
+              ),
+              SizedBox(height: Responsive.h(2)),
+              Text(
+                hasData ? '${percent.toStringAsFixed(1)}%' : '--',
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: Responsive.sp(16),
+                  fontWeight: FontWeight.w800,
+                  color: _colour,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
