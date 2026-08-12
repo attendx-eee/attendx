@@ -102,12 +102,42 @@ class DaySummary {
   }
 }
 
+/// How much a period is worth.
+///
+/// A lab is a three-hour block that replaces three ordinary periods, so
+/// counting it as one class alongside a fifty-minute lecture understates
+/// it badly — a student who skips every lab and attends every lecture
+/// would read as comfortably above the line.
+///
+/// These weights only move the *combined* figure. Within a single kind
+/// they cancel out: theory attendance is theory attended over theory
+/// held, and multiplying both sides by two changes nothing.
+class ClassWeight {
+  ClassWeight._();
+
+  static const int theory = 2;
+  static const int lab = 3;
+}
+
 /// Rolls day summaries up over a month or a semester.
+///
+/// Percentages are taken over classes that were actually **held and
+/// registered**, not over everything on the timetable. A class nobody
+/// has marked yet hasn't been missed, and putting it in the denominator
+/// drags every student down for their lecturer's paperwork.
 class AttendanceTotals {
   int theoryAttended = 0;
-  int theoryTotal = 0;
   int labAttended = 0;
-  int labTotal = 0;
+
+  /// Registered by somebody — a faculty scan, a CR, or an admin.
+  int theoryHeld = 0;
+  int labHeld = 0;
+
+  /// On the timetable, whether or not anyone has marked them. Shown as
+  /// context ("18 of 24 classes registered so far"), never used as a
+  /// denominator.
+  int theoryScheduled = 0;
+  int labScheduled = 0;
 
   /// Days with at least one period attended.
   int daysPresent = 0;
@@ -120,9 +150,13 @@ class AttendanceTotals {
 
   void add(DaySummary day) {
     theoryAttended += day.theoryAttended;
-    theoryTotal += day.theoryTotal;
     labAttended += day.labAttended;
-    labTotal += day.labTotal;
+
+    theoryHeld += day.theoryMarked;
+    labHeld += day.labMarked;
+
+    theoryScheduled += day.theoryTotal;
+    labScheduled += day.labTotal;
 
     switch (day.status) {
       case DayAttendance.full:
@@ -138,23 +172,51 @@ class AttendanceTotals {
     }
   }
 
+  /// Folds another roll-up in. Used to build a semester from months.
+  void merge(AttendanceTotals other) {
+    theoryAttended += other.theoryAttended;
+    labAttended += other.labAttended;
+    theoryHeld += other.theoryHeld;
+    labHeld += other.labHeld;
+    theoryScheduled += other.theoryScheduled;
+    labScheduled += other.labScheduled;
+    daysPresent += other.daysPresent;
+    daysAbsent += other.daysAbsent;
+    daysPartial += other.daysPartial;
+  }
+
   int get attended => theoryAttended + labAttended;
-  int get total => theoryTotal + labTotal;
+  int get held => theoryHeld + labHeld;
+  int get scheduled => theoryScheduled + labScheduled;
+
+  // ---------------------------------------------------------- weighted
+
+  int get attendedPoints =>
+      theoryAttended * ClassWeight.theory + labAttended * ClassWeight.lab;
+
+  int get heldPoints =>
+      theoryHeld * ClassWeight.theory + labHeld * ClassWeight.lab;
 
   double get theoryPercent =>
-      theoryTotal == 0 ? 0 : (theoryAttended / theoryTotal) * 100;
+      theoryHeld == 0 ? 0 : (theoryAttended / theoryHeld) * 100;
 
   double get labPercent =>
-      labTotal == 0 ? 0 : (labAttended / labTotal) * 100;
+      labHeld == 0 ? 0 : (labAttended / labHeld) * 100;
 
-  /// Overall percentage by *periods*, not by days.
+  /// The headline number: attended points over held points.
   ///
-  /// Counting days would let someone who attends one period of a
-  /// six-period day score the same as someone who sat through all six.
-  double get overallPercent => total == 0 ? 0 : (attended / total) * 100;
+  /// Weighted, so a missed lab costs what a missed lab is worth. This is
+  /// the only figure the weights change, and it is the one every screen
+  /// must agree on.
+  double get overallPercent =>
+      heldPoints == 0 ? 0 : (attendedPoints / heldPoints) * 100;
 
-  bool get isShortTheory => theoryTotal > 0 && theoryPercent < 75;
-  bool get isShortLab => labTotal > 0 && labPercent < 75;
+  bool get isShortTheory => theoryHeld > 0 && theoryPercent < 75;
+  bool get isShortLab => labHeld > 0 && labPercent < 75;
+  bool get isShortOverall => heldPoints > 0 && overallPercent < 75;
+
+  /// "34 of 41 classes registered so far" — how complete the picture is.
+  bool get hasUnregistered => scheduled > held;
 }
 
 /// Builds a [DaySummary] from a day's timetable and its marked periods.

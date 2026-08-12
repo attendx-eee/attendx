@@ -23,7 +23,7 @@ class TheoryLabCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (totals.total == 0) return const SizedBox.shrink();
+    if (totals.scheduled == 0) return const SizedBox.shrink();
 
     return Container(
       padding: Responsive.all(AppSpacing.lg),
@@ -63,8 +63,10 @@ class TheoryLabCard extends StatelessWidget {
           ),
           SizedBox(height: Responsive.h(4)),
           Text(
-            'Counted per class, not per day — a day with one of two '
-            'classes attended is worth half.',
+            'Counted per class over the classes actually held. A lab is '
+            'worth ${ClassWeight.lab} and a theory class '
+            '${ClassWeight.theory}, so the overall figure reflects the '
+            'time each one takes.',
             style: TextStyle(
               color: Colors.grey.shade600,
               fontSize: Responsive.sp(11),
@@ -72,25 +74,25 @@ class TheoryLabCard extends StatelessWidget {
           ),
           SizedBox(height: Responsive.h(18)),
 
-          if (totals.theoryTotal > 0)
+          if (totals.theoryScheduled > 0)
             _Bar(
               label: 'Theory',
               icon: Icons.menu_book_rounded,
               attended: totals.theoryAttended,
-              total: totals.theoryTotal,
+              total: totals.theoryHeld,
               percent: totals.theoryPercent,
               short: totals.isShortTheory,
             ),
 
-          if (totals.theoryTotal > 0 && totals.labTotal > 0)
+          if (totals.theoryScheduled > 0 && totals.labScheduled > 0)
             SizedBox(height: Responsive.h(16)),
 
-          if (totals.labTotal > 0)
+          if (totals.labScheduled > 0)
             _Bar(
               label: 'Lab',
               icon: Icons.science_rounded,
               attended: totals.labAttended,
-              total: totals.labTotal,
+              total: totals.labHeld,
               percent: totals.labPercent,
               short: totals.isShortLab,
             ),
@@ -113,15 +115,15 @@ class TheoryLabCard extends StatelessWidget {
               Expanded(
                 child: _Stat(
                   label: 'Classes',
-                  value: '${totals.attended}/${totals.total}',
+                  value: '${totals.attended}/${totals.held}',
                   color: AppColors.textPrimary,
                 ),
               ),
               Expanded(
                 child: _Stat(
-                  label: 'Part days',
-                  value: '${totals.daysPartial}',
-                  color: Colors.amber.shade700,
+                  label: 'Points',
+                  value: '${totals.attendedPoints}/${totals.heldPoints}',
+                  color: AppColors.textPrimary,
                 ),
               ),
             ],

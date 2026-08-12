@@ -18,6 +18,7 @@ import '../models/manual_attendance_model.dart';
 import '../widgets/attendance_day_tile.dart';
 import '../services/attendance_permission_service.dart';
 import '../services/manual_attendance_service.dart';
+import '../services/semester_totals_service.dart';
 import 'day_class_mark_sheet.dart';
 
 /// One student's attendance, month by month, with marking.
@@ -95,6 +96,12 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
   /// Bumped after a per-class save so the month reloads even though
   /// neither the month nor the manual marks changed.
   int _periodRevision = 0;
+
+  /// Weighted semester totals — the same figure the Analysis screen
+  /// ranks on and the student sees in their own app. Shown here so an
+  /// admin looking at one student and an admin looking at the ranking
+  /// are never quoting different numbers at each other.
+  AttendanceTotals? _semesterTotals;
 
   /// Days picked out for a single bulk action, by day-of-month.
   ///
@@ -179,6 +186,15 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
       if (mounted && key == _verdictKey) {
         setState(() => _verdicts = verdicts);
       }
+    });
+
+    SemesterTotalsService.instance.clearCache();
+    SemesterTotalsService.instance
+        .forStudent(uid: widget.studentUid, studentData: widget.studentData)
+        .then((totals) {
+      if (mounted) setState(() => _semesterTotals = totals);
+    }).catchError((Object e) {
+      debugPrint('Semester totals load failed: $e');
     });
 
     // Runs in parallel; the calendar paints on the verdicts and the
@@ -1127,6 +1143,7 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
                 child: const Center(child: CircularProgressIndicator()),
               )
             else ...[
+              _buildSemesterCard(),
               _buildSummary(verdicts),
               SizedBox(height: Responsive.h(14)),
               _buildCalendar(verdicts, canMark),
@@ -1257,6 +1274,102 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
     );
   }
 
+  /// The figure that decides eligibility.
+  ///
+  /// Sits above the month's day counts on purpose: those are useful
+  /// context but they are a different question, over a different window,
+  /// counted a different way. Whenever two numbers sit side by side
+  /// somebody eventually quotes the wrong one, so this is the one
+  /// labelled and coloured as the verdict.
+  Widget _buildSemesterCard() {
+    final totals = _semesterTotals;
+    if (totals == null || totals.scheduled == 0) {
+      return const SizedBox.shrink();
+    }
+
+    Widget stat(String label, String value, Color colour) => Expanded(
+          child: Column(
+            children: [
+              Text(value,
+                  style: AppTextStyles.headline.copyWith(
+                      color: colour, fontSize: Responsive.sp(19))),
+              SizedBox(height: Responsive.h(2)),
+              Text(label, style: AppTextStyles.caption),
+            ],
+          ),
+        );
+
+    return Column(
+      children: [
+        Container(
+          padding: Responsive.all(16),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+            border: Border.all(
+              color: totals.isShortOverall
+                  ? AppColors.danger.withValues(alpha: .4)
+                  : AppColors.divider,
+            ),
+            boxShadow: const [
+              BoxShadow(
+                  color: AppColors.shadow,
+                  blurRadius: 14,
+                  offset: Offset(0, 6)),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Semester to date',
+                  style: AppTextStyles.title
+                      .copyWith(fontSize: Responsive.sp(14))),
+              SizedBox(height: Responsive.h(2)),
+              Text(
+                'Lab counts ${ClassWeight.lab}, theory '
+                '${ClassWeight.theory}. Over classes actually held — '
+                '${totals.attended} of ${totals.held}'
+                '${totals.hasUnregistered ? ' (${totals.scheduled - totals.held} not registered yet)' : ''}.',
+                style: AppTextStyles.caption,
+              ),
+              SizedBox(height: Responsive.h(14)),
+              Row(
+                children: [
+                  stat(
+                    'Overall',
+                    '${totals.overallPercent.toStringAsFixed(1)}%',
+                    totals.isShortOverall
+                        ? AppColors.danger
+                        : AppColors.success,
+                  ),
+                  stat(
+                    'Theory',
+                    totals.theoryHeld == 0
+                        ? '--'
+                        : '${totals.theoryPercent.toStringAsFixed(0)}%',
+                    totals.isShortTheory
+                        ? AppColors.danger
+                        : AppColors.textPrimary,
+                  ),
+                  stat(
+                    'Lab',
+                    totals.labHeld == 0
+                        ? '--'
+                        : '${totals.labPercent.toStringAsFixed(0)}%',
+                    totals.isShortLab
+                        ? AppColors.danger
+                        : AppColors.textPrimary,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        SizedBox(height: Responsive.h(14)),
+      ],
+    );
+  }
+
   Widget _buildSummary(Map<int, DayVerdict> verdicts) {
     var present = 0;
     var lateCount = 0;
@@ -1296,16 +1409,20 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
           Row(
             children: [
               _SummaryCell(
-                  value: "$present", label: "Present", color: AppColors.success),
+                  value: "$present",
+                  label: "Days present",
+                  color: AppColors.success),
               _SummaryCell(
-                  value: "$absent", label: "Absent", color: AppColors.danger),
+                  value: "$absent",
+                  label: "Days absent",
+                  color: AppColors.danger),
               _SummaryCell(
                   value: "$lateCount",
                   label: "Late",
                   color: AppColors.warning),
               _SummaryCell(
                   value: "$percent%",
-                  label: "Rate",
+                  label: "$_monthLabel days",
                   color: AppColors.primary),
             ],
           ),

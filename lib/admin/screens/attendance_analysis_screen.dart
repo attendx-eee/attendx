@@ -7,7 +7,8 @@ import 'package:printing/printing.dart';
 
 import '../../attendance/models/attendance_marker.dart';
 import '../../attendance/screens/student_attendance_screen.dart';
-import '../../attendance/services/manual_attendance_service.dart';
+import '../../attendance/models/day_summary.dart';
+import '../../attendance/services/semester_totals_service.dart';
 import '../../core/constants/app_config.dart';
 import '../../core/auth/account_lookup.dart';
 import '../../core/responsive/responsive.dart';
@@ -16,7 +17,7 @@ import '../../core/theme/app_radius.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../services/attendance_service.dart';
 
-/// How the analysis table is ordered.
+/// Which column the table is ordered by.
 enum AnalysisSort {
   /// Register number, ascending. The default: it's the order marks
   /// sheets, seating and every other college list already uses, so an
@@ -26,14 +27,24 @@ enum AnalysisSort {
 
   /// Worst attendance first — the order that matters when the point of
   /// opening this screen is to find who's falling behind.
-  percentAsc,
-  percentDesc;
+  overallAsc,
+  overallDesc,
+
+  theoryAsc,
+  theoryDesc,
+
+  labAsc,
+  labDesc;
 
   String get label => switch (this) {
         AnalysisSort.regNoAsc => 'Reg no ↑',
         AnalysisSort.regNoDesc => 'Reg no ↓',
-        AnalysisSort.percentAsc => 'Lowest % first',
-        AnalysisSort.percentDesc => 'Highest % first',
+        AnalysisSort.overallAsc => 'Overall ↑',
+        AnalysisSort.overallDesc => 'Overall ↓',
+        AnalysisSort.theoryAsc => 'Theory ↑',
+        AnalysisSort.theoryDesc => 'Theory ↓',
+        AnalysisSort.labAsc => 'Lab ↑',
+        AnalysisSort.labDesc => 'Lab ↓',
       };
 
   /// ASCII-only version for the PDF.
@@ -44,39 +55,47 @@ enum AnalysisSort {
   String get pdfLabel => switch (this) {
         AnalysisSort.regNoAsc => 'Reg no (ascending)',
         AnalysisSort.regNoDesc => 'Reg no (descending)',
-        AnalysisSort.percentAsc => 'Lowest % first',
-        AnalysisSort.percentDesc => 'Highest % first',
+        AnalysisSort.overallAsc => 'Overall, lowest first',
+        AnalysisSort.overallDesc => 'Overall, highest first',
+        AnalysisSort.theoryAsc => 'Theory, lowest first',
+        AnalysisSort.theoryDesc => 'Theory, highest first',
+        AnalysisSort.labAsc => 'Lab, lowest first',
+        AnalysisSort.labDesc => 'Lab, highest first',
       };
 }
 
-/// One student's month.
+/// One student's row, backed entirely by [AttendanceTotals].
+///
+/// The row holds no arithmetic of its own. It used to count present and
+/// absent *days* from gate events while the student's own app counted
+/// *periods* from registers, and the two disagreed by ten points for the
+/// same person. Every figure here now comes from the one service both
+/// sides read.
 class _Row {
   final String uid;
   final String name;
   final String regNo;
   final Map<String, dynamic> data;
-  final int present;
-  final int absent;
-  final int late;
-  final int manual;
+  final AttendanceTotals totals;
 
   const _Row({
     required this.uid,
     required this.name,
     required this.regNo,
     required this.data,
-    required this.present,
-    required this.absent,
-    required this.late,
-    required this.manual,
+    required this.totals,
   });
 
-  int get total => present + absent;
+  /// Classes held, not scheduled. Zero means nothing has been
+  /// registered for this student yet, so there is no percentage to show.
+  int get held => totals.held;
 
-  double get percent => total == 0 ? 0 : (present / total) * 100;
+  double get percent => totals.overallPercent;
+  double get theoryPercent => totals.theoryPercent;
+  double get labPercent => totals.labPercent;
 
   /// The conventional attendance bar in Indian engineering colleges.
-  bool get isShort => total > 0 && percent < 75;
+  bool get isShort => totals.isShortOverall;
 }
 
 /// Admin-only: attendance for a chosen month and B.Tech year.
@@ -105,6 +124,12 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
 
   int _year = 1;
   AnalysisSort _sort = AnalysisSort.regNoAsc;
+
+  /// False = the selected month, true = everything since the semester
+  /// began. Attendance rules are applied to the semester, so that is the
+  /// figure that decides eligibility; the month view is for spotting a
+  /// bad patch early.
+  bool _wholeSemester = true;
 
   bool _loading = true;
   bool _exporting = false;
@@ -161,45 +186,35 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
             AppConfig.yearOf(data) == _year;
       }).toList();
 
+      // Cleared so a reload after marking attendance sees the new
+      // records rather than the ones cached when the screen opened.
+      SemesterTotalsService.instance.clearCache();
+
+      final byUid = {
+        for (final doc in students) doc.id: doc.data(),
+      };
+
+      // The window: this month only, or the whole semester to date.
+      final months = _wholeSemester
+          ? SemesterTotalsService.instance.semesterMonths()
+          : [_month];
+
+      final totals = await SemesterTotalsService.instance.forGroup(
+        students: byUid,
+        months: months,
+      );
+
       final rows = <_Row>[];
 
       for (final doc in students) {
         final data = doc.data();
-
-        final events = await AttendanceService.instance.eventsFor(doc.id);
-        final manual =
-            await ManualAttendanceService.instance.forStudent(doc.id);
-
-        final verdicts = await AttendanceService.instance.monthVerdicts(
-          studentData: data,
-          eventsByDate: events,
-          manualByDate: manual,
-          calendarYear: _month.year,
-          month: _month.month,
-        );
-
-        var present = 0, absent = 0, late = 0, manualCount = 0;
-        for (final v in verdicts.values) {
-          if (v.isManual) manualCount++;
-          if (v.status == DayStatus.present) {
-            present++;
-          } else if (v.status == DayStatus.late) {
-            present++;
-            late++;
-          } else if (v.status == DayStatus.absent) {
-            absent++;
-          }
-        }
 
         rows.add(_Row(
           uid: doc.id,
           name: (data['name'] ?? 'Unknown').toString(),
           regNo: (data['regNo'] ?? '').toString(),
           data: data,
-          present: present,
-          absent: absent,
-          late: late,
-          manual: manualCount,
+          totals: totals[doc.id] ?? AttendanceTotals(),
         ));
       }
 
@@ -248,30 +263,42 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
   List<_Row> get _sortedRows {
     final rows = [..._rows];
 
+    // Every percentage sort breaks ties on register number, so the
+    // order is stable and predictable rather than whatever Firestore
+    // happened to return.
+    void byMetric(double Function(_Row) metric, {required bool ascending}) {
+      rows.sort((a, b) {
+        final c = ascending
+            ? metric(a).compareTo(metric(b))
+            : metric(b).compareTo(metric(a));
+        return c != 0 ? c : _compareRegNo(a, b);
+      });
+    }
+
     switch (_sort) {
       case AnalysisSort.regNoAsc:
         rows.sort(_compareRegNo);
       case AnalysisSort.regNoDesc:
         rows.sort((a, b) => _compareRegNo(b, a));
-      case AnalysisSort.percentAsc:
-        // Ties broken by register number so the order is stable and
-        // predictable rather than whatever Firestore returned.
-        rows.sort((a, b) {
-          final c = a.percent.compareTo(b.percent);
-          return c != 0 ? c : _compareRegNo(a, b);
-        });
-      case AnalysisSort.percentDesc:
-        rows.sort((a, b) {
-          final c = b.percent.compareTo(a.percent);
-          return c != 0 ? c : _compareRegNo(a, b);
-        });
+      case AnalysisSort.overallAsc:
+        byMetric((r) => r.percent, ascending: true);
+      case AnalysisSort.overallDesc:
+        byMetric((r) => r.percent, ascending: false);
+      case AnalysisSort.theoryAsc:
+        byMetric((r) => r.theoryPercent, ascending: true);
+      case AnalysisSort.theoryDesc:
+        byMetric((r) => r.theoryPercent, ascending: false);
+      case AnalysisSort.labAsc:
+        byMetric((r) => r.labPercent, ascending: true);
+      case AnalysisSort.labDesc:
+        byMetric((r) => r.labPercent, ascending: false);
     }
 
     return rows;
   }
 
   double get _classAverage {
-    final counted = _rows.where((r) => r.total > 0).toList();
+    final counted = _rows.where((r) => r.held > 0).toList();
     if (counted.isEmpty) return 0;
     return counted.map((r) => r.percent).reduce((a, b) => a + b) /
         counted.length;
@@ -301,7 +328,8 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
               // at the cost of a few hundred KB in the APK for
               // punctuation nobody needs on a report.
               pw.Text(
-                'Attendance Analysis - Year $_year, $_monthLabel',
+                'Attendance Analysis - Year $_year, '
+                '${_wholeSemester ? 'semester to date' : _monthLabel}',
                 style:
                     pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
               ),
@@ -315,7 +343,9 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
               pw.SizedBox(height: 2),
               pw.Text(
                 'Class average ${_classAverage.toStringAsFixed(1)}% | '
-                '$_shortCount of ${rows.length} below 75%',
+                '$_shortCount of ${rows.length} below 75% | '
+                'lab counts ${ClassWeight.lab}, theory '
+                '${ClassWeight.theory}',
                 style:
                     const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
               ),
@@ -324,14 +354,17 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
           ),
           build: (context) => [
             pw.TableHelper.fromTextArray(
+              // The same seven values the table on screen shows, in the
+              // same order. An export that disagrees with the screen it
+              // was taken from is worse than no export.
               headers: const [
                 'Reg No',
                 'Name',
-                'Present',
-                'Absent',
-                'Late',
-                'Working days',
-                '%',
+                'Theory',
+                'Lab',
+                'Classes',
+                'Points',
+                'Overall %',
               ],
               headerStyle: pw.TextStyle(
                 fontWeight: pw.FontWeight.bold,
@@ -353,11 +386,19 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
                   .map((r) => [
                         r.regNo.isEmpty ? '--' : r.regNo,
                         r.name,
-                        '${r.present}',
-                        '${r.absent}',
-                        '${r.late}',
-                        '${r.total}',
-                        r.total == 0
+                        r.totals.theoryHeld == 0
+                            ? '--'
+                            : '${r.totals.theoryAttended}/'
+                                '${r.totals.theoryHeld}  '
+                                '(${r.theoryPercent.toStringAsFixed(0)}%)',
+                        r.totals.labHeld == 0
+                            ? '--'
+                            : '${r.totals.labAttended}/${r.totals.labHeld}  '
+                                '(${r.labPercent.toStringAsFixed(0)}%)',
+                        '${r.totals.attended}/${r.held}',
+                        '${r.totals.attendedPoints}/'
+                            '${r.totals.heldPoints}',
+                        r.held == 0
                             ? '--'
                             : '${r.percent.toStringAsFixed(1)}%',
                       ])
@@ -370,7 +411,10 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
       await Printing.sharePdf(
         bytes: await doc.save(),
         filename:
-            'attendance_year${_year}_${_month.year}-${_month.month.toString().padLeft(2, '0')}.pdf',
+            _wholeSemester
+                ? 'attendance_year${_year}_semester.pdf'
+                : 'attendance_year${_year}_${_month.year}-'
+                    '${_month.month.toString().padLeft(2, '0')}.pdf',
       );
     } catch (e) {
       if (mounted) {
@@ -508,15 +552,51 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
             ],
           ),
           SizedBox(height: Responsive.h(10)),
-          _Dropdown<AnalysisSort>(
-            label: "Sort by",
-            icon: Icons.sort_rounded,
-            value: _sort,
-            items: {for (final s in AnalysisSort.values) s: s.label},
-            onChanged: (s) {
-              if (s == null) return;
-              setState(() => _sort = s);
-            },
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: _Dropdown<AnalysisSort>(
+                  label: "Sort by",
+                  icon: Icons.sort_rounded,
+                  value: _sort,
+                  items: {for (final s in AnalysisSort.values) s: s.label},
+                  onChanged: (s) {
+                    if (s == null) return;
+                    setState(() => _sort = s);
+                  },
+                ),
+              ),
+              SizedBox(width: Responsive.w(12)),
+              Expanded(
+                flex: 2,
+                child: _Dropdown<bool>(
+                  label: "Period",
+                  icon: Icons.date_range_rounded,
+                  value: _wholeSemester,
+                  items: const {
+                    true: "Whole semester",
+                    false: "Selected month",
+                  },
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() => _wholeSemester = v);
+                    _load();
+                  },
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: Responsive.h(8)),
+          Text(
+            _wholeSemester
+                ? 'Semester to date. A lab counts '
+                    '${ClassWeight.lab}, a theory class '
+                    '${ClassWeight.theory}; percentages are over classes '
+                    'actually held, not the whole timetable.'
+                : 'Selected month only. Eligibility is judged on the '
+                    'semester, so switch back before deciding anything.',
+            style: AppTextStyles.caption,
           ),
         ],
       ),
@@ -682,7 +762,7 @@ class _StudentRow extends StatelessWidget {
   });
 
   Color get _percentColor {
-    if (row.total == 0) return AppColors.textSecondary;
+    if (row.held == 0) return AppColors.textSecondary;
     if (row.percent >= 75) return AppColors.success;
     if (row.percent >= 65) return AppColors.warning;
     return AppColors.danger;
@@ -746,32 +826,50 @@ class _StudentRow extends StatelessWidget {
                               style: AppTextStyles.caption,
                             ),
                           ),
-                          if (row.manual > 0) ...[
+                          if (row.totals.daysPartial > 0) ...[
                             SizedBox(width: Responsive.w(6)),
-                            Icon(Icons.edit_note_rounded,
+                            Icon(Icons.hourglass_bottom_rounded,
                                 size: Responsive.sp(13),
-                                color: AppColors.primary),
+                                color: Colors.amber.shade700),
                           ],
                         ],
                       ),
                     ],
                   ),
                 ),
+                // Theory and lab side by side, each over the classes
+                // actually held. The combined figure lives in the
+                // percentage pill on the right; showing it here as well
+                // is where two numbers start drifting apart.
                 Expanded(
                   flex: 3,
-                  child: Text(
-                    "${row.present} / ${row.absent} / ${row.late}",
-                    textAlign: TextAlign.center,
-                    style: AppTextStyles.caption.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      _MiniStat(
+                        icon: Icons.menu_book_rounded,
+                        value: row.totals.theoryHeld == 0
+                            ? '--'
+                            : '${row.totals.theoryAttended}/'
+                                '${row.totals.theoryHeld}',
+                        short: row.totals.isShortTheory,
+                      ),
+                      SizedBox(height: Responsive.h(3)),
+                      _MiniStat(
+                        icon: Icons.science_rounded,
+                        value: row.totals.labHeld == 0
+                            ? '--'
+                            : '${row.totals.labAttended}/'
+                                '${row.totals.labHeld}',
+                        short: row.totals.isShortLab,
+                      ),
+                    ],
                   ),
                 ),
                 SizedBox(
                   width: Responsive.w(58),
                   child: Text(
-                    row.total == 0
+                    row.held == 0
                         ? "--"
                         : "${row.percent.toStringAsFixed(0)}%",
                     textAlign: TextAlign.right,
@@ -863,6 +961,39 @@ class _Dropdown<T> extends StatelessWidget {
               ))
           .toList(),
       onChanged: onChanged,
+    );
+  }
+}
+
+/// One icon plus a fraction, for the theory / lab pair on each row.
+class _MiniStat extends StatelessWidget {
+  final IconData icon;
+  final String value;
+  final bool short;
+
+  const _MiniStat({
+    required this.icon,
+    required this.value,
+    required this.short,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colour = short ? AppColors.danger : AppColors.textSecondary;
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(icon, size: Responsive.sp(12), color: colour),
+        SizedBox(width: Responsive.w(4)),
+        Text(
+          value,
+          style: AppTextStyles.caption.copyWith(
+            fontWeight: FontWeight.w700,
+            color: short ? AppColors.danger : AppColors.textPrimary,
+          ),
+        ),
+      ],
     );
   }
 }

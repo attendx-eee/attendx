@@ -9,6 +9,7 @@ import '../../core/responsive/responsive.dart';
 import '../../core/theme/app_spacing.dart';
 import '../../attendance/models/day_summary.dart';
 import '../../attendance/services/manual_attendance_service.dart';
+import '../../attendance/services/semester_totals_service.dart';
 import '../../faculty/services/period_attendance_service.dart';
 import '../../services/attendance_service.dart';
 import '../../services/firestore_service.dart';
@@ -140,7 +141,16 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
           month: today.month,
         );
         periodDays = summary.days;
-        periodTotals = summary.totals;
+
+        // The headline is the *semester*, from the same service the
+        // admin console reads. The month summary above still drives the
+        // calendar tiles, but a student comparing their phone against
+        // the office's screen has to see one number, not two.
+        SemesterTotalsService.instance.clearCache();
+        periodTotals = await SemesterTotalsService.instance.forStudent(
+          uid: uid,
+          studentData: student,
+        );
       } catch (e) {
         debugPrint('Period summary load failed: $e');
       }
@@ -377,11 +387,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   Widget build(BuildContext context) {
     final today = DateTime.now();
 
-    // Derived from the same monthly map the dashboard alert uses, not
-    // from this screen's own day loop. The two loops disagreed about
-    // today and about days with no timetable, and quoted 71.9% and
-    // 67.6% for the same student.
-    final overall = AttendanceService.rollUp(_semesterAttendance);
+    // Weighted, period-based, semester-wide — the same figure the admin
+    // console ranks on. Day counts are still shown beside it because
+    // "23 of 34 days" is what a student pictures, but the percentage is
+    // the one that decides eligibility.
+    final overall = _periodTotals;
 
     return Scaffold(
       backgroundColor: const Color(0xffF6F8FC),
@@ -435,10 +445,10 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                       delegate: SliverChildListDelegate(
                         [
                           AttendanceSummaryCard(
-                            attendancePercentage: overall.percent,
-                            presentDays: overall.present,
-                            absentDays: overall.absent,
-                            totalDays: overall.total,
+                            attendancePercentage: overall.overallPercent,
+                            presentDays: overall.attended,
+                            absentDays: overall.held - overall.attended,
+                            totalDays: overall.held,
                           ),
                           SizedBox(height: Responsive.h(20)),
                           AttendanceOverviewCard(
@@ -466,11 +476,11 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                             daySummaries: _calendarSummaries,
                             dayHolidays: _calendarHolidays,
                           ),
-                          if (_periodTotals.total > 0) ...[
+                          if (_periodTotals.scheduled > 0) ...[
                             SizedBox(height: Responsive.h(20)),
                             TheoryLabCard(
                               totals: _periodTotals,
-                              monthLabel: _monthLabel,
+                              monthLabel: 'Semester to date',
                             ),
                           ],
                           SizedBox(height: Responsive.h(20)),

@@ -5,6 +5,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:custom_refresh_indicator/custom_refresh_indicator.dart';
 import '../../services/auth_service.dart';
 import '../../services/attendance_service.dart';
+import '../../attendance/models/day_summary.dart';
+import '../../attendance/services/semester_totals_service.dart';
 import '../../services/firestore_service.dart';
 import '../login.dart';
 import '../profile.dart';
@@ -85,6 +87,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       m: {"present": 0, "absent": 0, "total": 0, "late": 0},
   };
 
+  /// Weighted semester totals — the single figure every screen quotes.
+  AttendanceTotals _semesterTotals = AttendanceTotals();
+
   @override
   void initState() {
     super.initState();
@@ -130,6 +135,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
       } catch (e) {
         debugPrint("Attendance stats load failed: $e");
+      }
+
+      try {
+        if (student != null) {
+          SemesterTotalsService.instance.clearCache();
+          _semesterTotals = await SemesterTotalsService.instance.forStudent(
+            uid: uid,
+            studentData: student,
+          );
+        }
+      } catch (e) {
+        debugPrint("Semester totals load failed: $e");
       }
 
       try {
@@ -486,10 +503,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final String role = (data['role'] ?? 'student').toString().toLowerCase();
     final bool isCR = role == 'cr';
 
-    // One shared roll-up, so this alert and the Attendance page can't
-    // quote different figures for the same student.
-    final attendancePercentage =
-        AttendanceService.rollUp(attendanceStats).percent;
+    // The same weighted, period-based figure the Attendance page shows
+    // and the admin console ranks on. This alert used to sum whole days
+    // from gate events, which is why it once read 71.9% while the
+    // attendance page read 67.6% for the same student on the same day.
+    final attendancePercentage = _semesterTotals.overallPercent;
 
     return Scaffold(
       backgroundColor: AppColors.background,
