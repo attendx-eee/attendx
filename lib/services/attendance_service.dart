@@ -5,7 +5,6 @@ import '../admin/models/period_model.dart';
 import '../admin/services/holiday_service.dart';
 import '../admin/services/timetable_service.dart';
 import '../attendance/models/manual_attendance_model.dart';
-import '../attendance/services/manual_attendance_service.dart';
 import '../core/constants/app_config.dart';
 import '../timetable/services/schedule_resolver.dart';
 
@@ -230,106 +229,16 @@ class AttendanceService {
     );
   }
 
-  /// Real monthly attendance for the semester, replacing hardcoded stats.
-  ///
-  /// Returns {monthName: {present, absent, total, late}} for every month
-  /// in [months] (missing data = zeros, so UI code can rely on the keys).
-  Future<Map<String, Map<String, int>>> semesterStats({
-    required String uid,
-    required Map<String, dynamic> studentData,
-    required List<String> months,
-  }) async {
-    final result = <String, Map<String, int>>{
-      for (final m in months) m: {'present': 0, 'absent': 0, 'total': 0, 'late': 0},
-    };
-
-    try {
-      final department = AppConfig.departmentOf(studentData);
-      final year = AppConfig.yearOf(studentData);
-
-      // Warm the holiday cache before any day is judged. It's checked
-      // synchronously per-day inside the loop below, and an unloaded
-      // cache silently reports every holiday as a working day — which
-      // would mark a whole class absent for Sankranti.
-      await HolidayService.instance.all();
-
-      // One query for all of this student's events (uid is a single-field
-      // filter — no composite index required).
-      final snapshot = await _events.where('uid', isEqualTo: uid).get();
-
-      final eventsByDate = <String, Map<String, dynamic>>{
-        for (final doc in snapshot.docs)
-          (doc.data()['date'] ?? '').toString(): doc.data(),
-      };
-
-      // Manual corrections layered on top of the Pi's record.
-      final manualByDate =
-          await ManualAttendanceService.instance.forStudent(uid);
-
-      const monthNumbers = {
-        'January': 1, 'February': 2, 'March': 3, 'April': 4,
-        'May': 5, 'June': 6, 'July': 7, 'August': 8,
-        'September': 9, 'October': 10, 'November': 11, 'December': 12,
-      };
-
-      // Jul-Dec belong to the first calendar year of the academic year,
-      // Jan-Jun to the second (e.g. 2026-2027).
-      final firstYear =
-          int.tryParse(AppConfig.academicYear.split('-').first) ??
-              DateTime.now().year;
-
-      final today = DateTime.now();
-
-      for (final monthName in months) {
-        final monthNo = monthNumbers[monthName];
-        if (monthNo == null) continue;
-
-        final calendarYear = monthNo >= 7 ? firstYear : firstYear + 1;
-        final daysInMonth = DateTime(calendarYear, monthNo + 1, 0).day;
-        final stats = result[monthName]!;
-
-        for (var d = 1; d <= daysInMonth; d++) {
-          final date = DateTime(calendarYear, monthNo, d);
-
-          // Only count days that have already happened.
-          if (date.isAfter(today)) break;
-
-          final weekday = AppConfig.dayName(date);
-          final periods = await scheduledPeriods(
-            department: department,
-            year: year,
-            weekday: weekday,
-            on: date,
-          );
-
-          final dateId = AppConfig.dateId(date);
-          final event = eventsByDate[dateId];
-          final verdict = classifyDay(
-            date: date,
-            periods: periods,
-            checkIn: event?['checkIn'] is Timestamp
-                ? event!['checkIn'] as Timestamp
-                : null,
-            manual: manualByDate[dateId],
-          );
-
-          if (verdict == null) continue; // not a college day
-
-          stats['total'] = stats['total']! + 1;
-          if (verdict.present) {
-            stats['present'] = stats['present']! + 1;
-            if (verdict.late) stats['late'] = stats['late']! + 1;
-          } else {
-            stats['absent'] = stats['absent']! + 1;
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('semesterStats failed: $e');
-    }
-
-    return result;
-  }
+  // `semesterStats` used to live here: month-by-month present, absent
+  // and late *days*, judged from the gate check-in against the
+  // timetable. Three screens read it and each divided present by total
+  // to get a percentage — which is how the profile page came to show
+  // 80% while the attendance page showed 56% for the same student.
+  //
+  // Days were the wrong unit once attendance became per-period, and a
+  // second implementation of the same question is a second answer
+  // waiting to happen. Everything now goes through
+  // SemesterTotalsService, which counts classes and weights them.
 
   /// All events for one date (admin insights). Filter by student uids
   /// client-side if needed.

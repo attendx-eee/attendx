@@ -16,6 +16,7 @@ import '../models/attendance_permission_model.dart';
 import '../models/day_summary.dart';
 import '../models/manual_attendance_model.dart';
 import '../widgets/attendance_day_tile.dart';
+import '../widgets/month_totals_card.dart';
 import '../services/attendance_permission_service.dart';
 import '../services/manual_attendance_service.dart';
 import '../services/semester_totals_service.dart';
@@ -103,6 +104,12 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
   /// are never quoting different numbers at each other.
   AttendanceTotals? _semesterTotals;
 
+  /// The visible month on its own, and what that month's timetable
+  /// holds. Both drive the card that replaced days present / days
+  /// absent, which could not distinguish one class attended from three.
+  AttendanceTotals? _monthTotals;
+  MonthPlan _monthPlan = const MonthPlan();
+
   /// Days picked out for a single bulk action, by day-of-month.
   ///
   /// Empty means normal mode: tapping a day opens its sheet. Non-empty
@@ -188,14 +195,12 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
       }
     });
 
-    SemesterTotalsService.instance.clearCache();
-    SemesterTotalsService.instance
-        .forStudent(uid: widget.studentUid, studentData: widget.studentData)
-        .then((totals) {
-      if (mounted) setState(() => _semesterTotals = totals);
-    }).catchError((Object e) {
-      debugPrint('Semester totals load failed: $e');
-    });
+    // No cache clear here. This runs on every month change and after
+    // every save, and wiping the whole semester plus the timetable each
+    // time is what made the console feel slow — a single correction was
+    // re-reading six months of records before anything repainted.
+    // Marking invalidates the one month it touched instead.
+    _loadTotals(key);
 
     // Runs in parallel; the calendar paints on the verdicts and the
     // fractions fill in a beat later rather than holding the grid back.
@@ -212,6 +217,63 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
       }
     }).catchError((Object e) {
       debugPrint('Period summary load failed: $e');
+    });
+  }
+
+  /// Semester totals, the visible month, and that month's plan.
+  ///
+  /// One pass: the month contexts are shared, so asking for the month
+  /// after the semester costs nothing extra. [key] guards against a
+  /// slower earlier request painting over a newer one.
+  Future<void> _loadTotals(String key) async {
+    final service = SemesterTotalsService.instance;
+
+    try {
+      final semester = await service.forStudent(
+        uid: widget.studentUid,
+        studentData: widget.studentData,
+      );
+
+      final month = await service.forStudent(
+        uid: widget.studentUid,
+        studentData: widget.studentData,
+        months: [_visibleMonth],
+      );
+
+      final plan = await service.planFor(
+        department: AppConfig.departmentOf(widget.studentData),
+        year: _studentYear,
+        month: _visibleMonth,
+        batch: (widget.studentData['batch'] ?? '').toString(),
+      );
+
+      if (mounted && key == _verdictKey) {
+        setState(() {
+          _semesterTotals = semester;
+          _monthTotals = month;
+          _monthPlan = plan;
+        });
+      }
+    } catch (e) {
+      debugPrint('Totals load failed: $e');
+    }
+  }
+
+  /// Forgets the month that was just written to, and reloads.
+  ///
+  /// Targeted rather than [SemesterTotalsService.clearCache] — a mark
+  /// changes one month for one year group, and throwing away the
+  /// timetable alongside it bought nothing but latency.
+  void _afterWrite() {
+    SemesterTotalsService.instance.invalidateMonth(
+      department: AppConfig.departmentOf(widget.studentData),
+      year: _studentYear,
+      month: _visibleMonth,
+    );
+
+    setState(() {
+      _periodRevision++;
+      _verdictKey = null;
     });
   }
 
@@ -963,10 +1025,7 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
     // Nothing the verdict cache keys on has changed, so nudge it or
     // the day would keep showing its old fraction until the month was
     // switched away and back.
-    setState(() {
-      _periodRevision++;
-      _verdictKey = null;
-    });
+    _afterWrite();
   }
 
   // ------------------------------------------------------- CR permission
@@ -1144,7 +1203,7 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
               )
             else ...[
               _buildSemesterCard(),
-              _buildSummary(verdicts),
+              _buildMonthCard(verdicts),
               SizedBox(height: Responsive.h(14)),
               _buildCalendar(verdicts, canMark),
               if (_selecting && canMark) ...[
@@ -1370,81 +1429,24 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
     );
   }
 
-  Widget _buildSummary(Map<int, DayVerdict> verdicts) {
-    var present = 0;
-    var lateCount = 0;
-    var absent = 0;
-    var manual = 0;
+  /// The visible month, counted in classes.
+  ///
+  /// This used to be days present, days absent, late and a percentage of
+  /// days. Days stopped being a meaningful unit the moment attendance
+  /// became per-period: a student who made one of three classes and a
+  /// student who made all three were both "a present day", and the
+  /// office was reading a figure that could not tell them apart.
+  Widget _buildMonthCard(Map<int, DayVerdict> verdicts) {
+    final manual = verdicts.values.where((v) => v.isManual).length;
 
-    for (final v in verdicts.values) {
-      if (v.isManual) manual++;
-
-      // A late day still counts as present — it's tracked separately so
-      // the admin can see punctuality without it dragging the rate down.
-      if (v.status == DayStatus.present) {
-        present++;
-      } else if (v.status == DayStatus.late) {
-        present++;
-        lateCount++;
-      } else if (v.status == DayStatus.absent) {
-        absent++;
-      }
-    }
-
-    final total = present + absent;
-    final percent = total == 0 ? 0 : ((present / total) * 100).round();
-
-    return Container(
-      padding: Responsive.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppRadius.lg),
-        boxShadow: const [
-          BoxShadow(
-              color: AppColors.shadow, blurRadius: 14, offset: Offset(0, 6)),
-        ],
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              _SummaryCell(
-                  value: "$present",
-                  label: "Days present",
-                  color: AppColors.success),
-              _SummaryCell(
-                  value: "$absent",
-                  label: "Days absent",
-                  color: AppColors.danger),
-              _SummaryCell(
-                  value: "$lateCount",
-                  label: "Late",
-                  color: AppColors.warning),
-              _SummaryCell(
-                  value: "$percent%",
-                  label: "$_monthLabel days",
-                  color: AppColors.primary),
-            ],
-          ),
-          if (manual > 0) ...[
-            SizedBox(height: Responsive.h(12)),
-            Row(
-              children: [
-                Icon(Icons.edit_note_rounded,
-                    size: Responsive.sp(15), color: AppColors.primary),
-                SizedBox(width: Responsive.w(6)),
-                Expanded(
-                  child: Text(
-                    "$manual day${manual == 1 ? '' : 's'} in this month "
-                    "${manual == 1 ? 'was' : 'were'} marked by hand.",
-                    style: AppTextStyles.caption,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ],
-      ),
+    return MonthTotalsCard(
+      label: _monthLabel,
+      totals: _monthTotals ?? AttendanceTotals(),
+      plan: _monthPlan,
+      footnote: manual == 0
+          ? null
+          : '$manual day${manual == 1 ? '' : 's'} in this month '
+              '${manual == 1 ? 'was' : 'were'} marked by hand.',
     );
   }
 
@@ -1874,33 +1876,6 @@ class _StatusButton extends StatelessWidget {
       child: Text(label,
           style: TextStyle(
               fontWeight: FontWeight.w700, fontSize: Responsive.sp(13))),
-    );
-  }
-}
-
-class _SummaryCell extends StatelessWidget {
-  final String value;
-  final String label;
-  final Color color;
-
-  const _SummaryCell({
-    required this.value,
-    required this.label,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(value,
-              style: AppTextStyles.headline
-                  .copyWith(color: color, fontSize: Responsive.sp(20))),
-          SizedBox(height: Responsive.h(2)),
-          Text(label, style: AppTextStyles.caption),
-        ],
-      ),
     );
   }
 }

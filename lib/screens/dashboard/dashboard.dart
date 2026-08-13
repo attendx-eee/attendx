@@ -69,23 +69,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// 0 = today, 1 = next college day (swipe left/right to switch).
   int _scheduleDayIndex = 0;
 
-  final List<String> semesterMonths = [
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December"
-  ];
-
-  /// Real attendance derived from Raspberry Pi check-in events,
-  /// loaded in [loadStudent]. Keys always match [semesterMonths].
-  Map<String, Map<String, int>> attendanceStats = {
-    for (final m in [
-      "July", "August", "September", "October", "November", "December"
-    ])
-      m: {"present": 0, "absent": 0, "total": 0, "late": 0},
-  };
+  // A month-by-month `attendanceStats` map used to be loaded here from
+  // `semesterStats`, which walks every day of the semester against the
+  // timetable. Nothing on this screen ever read it — the monthly
+  // breakdown moved to the Attendance page some time ago and the fetch
+  // stayed behind. It was pure latency on every dashboard open.
 
   /// Weighted semester totals — the single figure every screen quotes.
   AttendanceTotals _semesterTotals = AttendanceTotals();
@@ -122,19 +110,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
         todayAttendance = await AttendanceService.instance.todayEvent(uid);
       } catch (e) {
         debugPrint("Today attendance load failed: $e");
-      }
-
-      try {
-        // Monthly attendance computed from Pi events + timetable.
-        if (student != null) {
-          attendanceStats = await AttendanceService.instance.semesterStats(
-            uid: uid,
-            studentData: student,
-            months: semesterMonths,
-          );
-        }
-      } catch (e) {
-        debugPrint("Attendance stats load failed: $e");
       }
 
       try {

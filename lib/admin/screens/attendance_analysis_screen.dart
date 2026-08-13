@@ -213,6 +213,11 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
   String? _error;
   List<_Row> _rows = const [];
 
+  /// What the timetable holds for the window being shown. Context for
+  /// the percentages: "3 held" means something different when the month
+  /// plans 4 classes than when it plans 40.
+  MonthPlan _plan = const MonthPlan();
+
   @override
   void initState() {
     super.initState();
@@ -262,7 +267,14 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
     return match.isEmpty ? _selectableMonths.last : match.first;
   }
 
-  Future<void> _load() async {
+  /// [fresh] discards the cached months first.
+  ///
+  /// Only worth doing when something may have been written — the refresh
+  /// button, or coming back from a student's calendar. Changing the year
+  /// or the month reads a different slice of data that was never stale,
+  /// and clearing the cache for those meant every dropdown change
+  /// re-read the whole semester.
+  Future<void> _load({bool fresh = false}) async {
     setState(() {
       _loading = true;
       _error = null;
@@ -282,9 +294,7 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
             AppConfig.yearOf(data) == _year;
       }).toList();
 
-      // Cleared so a reload after marking attendance sees the new
-      // records rather than the ones cached when the screen opened.
-      SemesterTotalsService.instance.clearCache();
+      if (fresh) SemesterTotalsService.instance.clearCache();
 
       final byUid = {
         for (final doc in students) doc.id: doc.data(),
@@ -303,6 +313,21 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
         months: months,
       );
 
+      // The plan across the same window. Free once forGroup has run —
+      // it reads the months that are already resolved and cached.
+      var theory = 0;
+      var lab = 0;
+
+      for (final month in months) {
+        final plan = await SemesterTotalsService.instance.planFor(
+          department: AppConfig.department,
+          year: _year,
+          month: month,
+        );
+        theory += plan.theory;
+        lab += plan.lab;
+      }
+
       final rows = <_Row>[];
 
       for (final doc in students) {
@@ -320,6 +345,7 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
       if (mounted) {
         setState(() {
           _rows = rows;
+          _plan = MonthPlan(theory: theory, lab: lab);
           _loading = false;
         });
       }
@@ -581,7 +607,7 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
         ),
       ),
     ).then((_) {
-      if (mounted) _load();
+      if (mounted) _load(fresh: true);
     });
   }
 
@@ -603,7 +629,7 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
           IconButton(
             tooltip: "Refresh",
             icon: const Icon(Icons.refresh_rounded),
-            onPressed: _loading ? null : _load,
+            onPressed: _loading ? null : () => _load(fresh: true),
           ),
           IconButton(
             tooltip: "Export PDF",
@@ -675,40 +701,21 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
             ],
           ),
           SizedBox(height: Responsive.h(10)),
-          Row(
-            children: [
-              Expanded(
-                flex: 3,
-                child: _Dropdown<AnalysisSort>(
-                  label: "Sort by",
-                  icon: Icons.sort_rounded,
-                  value: _sort,
-                  items: {for (final s in AnalysisSort.values) s: s.label},
-                  onChanged: (s) {
-                    if (s == null) return;
-                    setState(() => _sort = s);
-                  },
-                ),
-              ),
-              SizedBox(width: Responsive.w(12)),
-              Expanded(
-                flex: 2,
-                child: _Dropdown<AnalysisMetric>(
-                  label: "Show",
-                  icon: Icons.insights_rounded,
-                  value: _metric,
-                  items: {
-                    for (final m in AnalysisMetric.values) m: m.label,
-                  },
-                  // No reload: all three are already computed, so this
-                  // only changes which one is being led with.
-                  onChanged: (m) {
-                    if (m == null) return;
-                    setState(() => _metric = m);
-                  },
-                ),
-              ),
-            ],
+
+          // Sort stands alone. There was a "Show" dropdown beside it
+          // picking overall / theory / lab, which was a second control
+          // for something the three averages on the card below already
+          // do by being tapped — two ways to set one value, a foot apart
+          // on the same screen.
+          _Dropdown<AnalysisSort>(
+            label: "Sort by",
+            icon: Icons.sort_rounded,
+            value: _sort,
+            items: {for (final s in AnalysisSort.values) s: s.label},
+            onChanged: (s) {
+              if (s == null) return;
+              setState(() => _sort = s);
+            },
           ),
           SizedBox(height: Responsive.h(8)),
           Text(
@@ -810,6 +817,14 @@ class _AttendanceAnalysisScreenState extends State<AttendanceAnalysisScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text("Year $_year  •  $_monthLabel", style: AppTextStyles.title),
+          if (!_plan.isEmpty) ...[
+            SizedBox(height: Responsive.h(2)),
+            Text(
+              'On the timetable: ${_plan.theory} theory'
+              '${_plan.lab > 0 ? ' · ${_plan.lab} lab' : ''}',
+              style: AppTextStyles.caption,
+            ),
+          ],
           SizedBox(height: Responsive.h(12)),
           Row(
             children: [

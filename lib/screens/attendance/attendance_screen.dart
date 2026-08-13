@@ -50,33 +50,27 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   List<AttendanceHistory> _history = [];
 
   // Semester monthly overview (moved here from the dashboard).
-  final PageController _pageController = PageController(initialPage: 0);
+  //
+  // The months are whatever the semester actually spans rather than a
+  // hardcoded July-to-December, and each one's figures come from the
+  // same service the console reads.
   int _selectedMonthIndex = 0;
-  final List<String> _semesterMonths = [
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December"
+  List<DateTime> _semesterMonths = const [];
+  Map<String, AttendanceTotals> _monthTotals = const {};
+  Map<String, MonthPlan> _monthPlans = const {};
+
+  static const List<String> _monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
   ];
-  Map<String, Map<String, int>> _semesterAttendance = {
-    for (final m in [
-      "July", "August", "September", "October", "November", "December"
-    ])
-      m: {"present": 0, "absent": 0, "total": 0, "late": 0},
-  };
+
+  List<String> get _monthLabels =>
+      [for (final m in _semesterMonths) _monthNames[m.month - 1]];
 
   @override
   void initState() {
     super.initState();
     _load();
-  }
-
-  @override
-  void dispose() {
-    _pageController.dispose();
-    super.dispose();
   }
 
   String _fmtTime(DateTime d) {
@@ -89,6 +83,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid == null) throw Exception('No user');
+
+      // Once, at the top. This screen reads the semester, every month
+      // and the timetable plan out of the same resolved data — clearing
+      // between those steps, as it used to, fetched all of it three
+      // times over and was most of the wait.
+      SemesterTotalsService.instance.clearCache();
 
       final studentDoc = await FirestoreService().getStudent(uid);
       final student = studentDoc.data() ?? <String, dynamic>{};
@@ -110,15 +110,35 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
       // Semester-wide monthly breakdown (independent query — a failure
       // here shouldn't block the rest of the screen).
-      var semesterAttendance = _semesterAttendance;
+      //
+      // Class-based now, from SemesterTotalsService, so the month a
+      // student taps and the month the office opens are the same
+      // numbers. The old path counted days from gate events and drifted.
+      final months = SemesterTotalsService.instance.semesterMonths();
+      final monthTotals = <String, AttendanceTotals>{};
+      final monthPlans = <String, MonthPlan>{};
+
       try {
-        semesterAttendance = await _service.semesterStats(
+        final byMonth = await SemesterTotalsService.instance.byMonth(
           uid: uid,
           studentData: student,
-          months: _semesterMonths,
+          months: months,
         );
+
+        for (final m in months) {
+          final id = '${m.year}-${m.month.toString().padLeft(2, '0')}';
+          final label = _monthNames[m.month - 1];
+
+          monthTotals[label] = byMonth[id] ?? AttendanceTotals();
+          monthPlans[label] = await SemesterTotalsService.instance.planFor(
+            department: department,
+            year: year,
+            month: m,
+            batch: (student['batch'] ?? '').toString(),
+          );
+        }
       } catch (e) {
-        debugPrint('Semester attendance load failed: $e');
+        debugPrint('Monthly breakdown load failed: $e');
       }
 
       final today = DateTime.now();
@@ -146,7 +166,6 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         // admin console reads. The month summary above still drives the
         // calendar tiles, but a student comparing their phone against
         // the office's screen has to see one number, not two.
-        SemesterTotalsService.instance.clearCache();
         periodTotals = await SemesterTotalsService.instance.forStudent(
           uid: uid,
           studentData: student,
@@ -374,7 +393,16 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
 
         _subjects = subjects;
         _history = history;
-        _semesterAttendance = semesterAttendance;
+
+        _semesterMonths = months;
+        _monthTotals = monthTotals;
+        _monthPlans = monthPlans;
+
+        // Opens on the current month rather than on July — the month a
+        // student is living in is the one they came to look at.
+        _selectedMonthIndex =
+            months.isEmpty ? 0 : months.length - 1;
+
         _loading = false;
       });
     } catch (e) {
@@ -452,14 +480,12 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                           ),
                           SizedBox(height: Responsive.h(20)),
                           AttendanceOverviewCard(
-                            months: _semesterMonths,
+                            months: _monthLabels,
                             selectedIndex: _selectedMonthIndex,
-                            pageController: _pageController,
-                            attendance: _semesterAttendance,
+                            totals: _monthTotals,
+                            plans: _monthPlans,
                             onMonthChanged: (index) {
-                              setState(() {
-                                _selectedMonthIndex = index;
-                              });
+                              setState(() => _selectedMonthIndex = index);
                             },
                           ),
                           // Today's check-in / check-out status lives on

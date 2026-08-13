@@ -4,7 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
-import '../services/attendance_service.dart';
+import '../attendance/models/day_summary.dart';
+import '../attendance/services/semester_totals_service.dart';
 import '../services/profile_photo_service.dart';
 import '../core/responsive/responsive.dart';
 import '../core/theme/app_colors.dart';
@@ -29,13 +30,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isUploading = false;
   late Map<String, dynamic> data;
 
-  /// Real attendance from Raspberry Pi events, loaded in [_loadAttendance].
-  Map<String, Map<String, int>> attendanceStats = {
-    for (final m in [
-      "July", "August", "September", "October", "November", "December"
-    ])
-      m: {"present": 0, "absent": 0, "total": 0, "late": 0},
-  };
+  /// Weighted semester totals — the same figures every other screen
+  /// quotes.
+  ///
+  /// This screen used to total present and absent *days* from gate
+  /// events and divide one by the other, which is why it read 80% while
+  /// the Attendance page read 56% for the same student on the same
+  /// afternoon. Days and classes were never going to agree, and of the
+  /// two only classes decide eligibility.
+  AttendanceTotals _totals = AttendanceTotals();
 
   @override
   void initState() {
@@ -48,13 +51,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
 
-    final stats = await AttendanceService.instance.semesterStats(
-      uid: uid,
-      studentData: data,
-      months: attendanceStats.keys.toList(),
-    );
+    try {
+      final totals = await SemesterTotalsService.instance.forStudent(
+        uid: uid,
+        studentData: data,
+      );
 
-    if (mounted) setState(() => attendanceStats = stats);
+      if (mounted) setState(() => _totals = totals);
+    } catch (e) {
+      debugPrint('Profile totals load failed: $e');
+    }
   }
 
   Future<void> loadStudent() async {
@@ -253,34 +259,43 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  /// Where the student stands, and how far from the bar they are.
+  ///
+  /// Worked in points rather than classes, because that is what the
+  /// percentage is made of — a missed lab costs [ClassWeight.lab] and a
+  /// missed theory class [ClassWeight.theory]. The answer is then
+  /// expressed in whole theory classes, which is the unit a student
+  /// thinks in and the smaller of the two, so the figure is the safe
+  /// one to act on.
+  ///
+  /// Above the bar, with A attended points of H held: missing k theory
+  /// classes gives A / (H + 2k), so k is at most (A / 0.75 - H) / 2.
+  /// Below it, attending n more gives (A + 2n) / (H + 2n) >= 0.75, so n
+  /// is at least (0.75H - A) / 0.5.
   Map<String, dynamic> _calculateAttendanceProjections() {
-    int totalPresent = 0;
-    int totalClasses = 0;
+    final attended = _totals.attendedPoints.toDouble();
+    final held = _totals.heldPoints.toDouble();
 
-    attendanceStats.forEach((_, value) {
-      totalPresent += value["present"]!;
-      totalClasses += value["total"]!;
-    });
+    final percentage = _totals.overallPercent;
+    final above = held > 0 && percentage >= 75.0;
 
-    double currentPercentage =
-        totalClasses > 0 ? (totalPresent / totalClasses) * 100 : 0.0;
-    int targetDeltaClasses = 0;
-    bool isAboveThreshold = currentPercentage >= 75.0;
+    final step = ClassWeight.theory.toDouble();
+    var classes = 0;
 
-    if (!isAboveThreshold) {
-      targetDeltaClasses =
-          ((0.75 * totalClasses - totalPresent) / 0.25).ceil().clamp(0, 100);
-    } else {
-      targetDeltaClasses =
-          ((totalPresent - 0.75 * totalClasses) / 0.75).floor().clamp(0, 100);
+    if (held > 0) {
+      classes = above
+          ? ((attended / 0.75 - held) / step).floor().clamp(0, 100)
+          : ((0.75 * held - attended) / (step - 0.75 * step))
+              .ceil()
+              .clamp(0, 100);
     }
 
     return {
-      "percentage": currentPercentage,
-      "isAboveThreshold": isAboveThreshold,
-      "classCount": targetDeltaClasses,
-      "present": totalPresent,
-      "total": totalClasses
+      "percentage": percentage,
+      "isAboveThreshold": above,
+      "classCount": classes,
+      "present": _totals.attended,
+      "total": _totals.held,
     };
   }
 
@@ -492,7 +507,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   const Spacer(),
                   Flexible(
                     child: Text(
-                      "${projection['present']}/${projection['total']} sessions",
+                      "${projection['present']}/${projection['total']} "
+                      "classes held",
                       style: AppTextStyles.caption,
                       textAlign: TextAlign.end,
                     ),
@@ -541,9 +557,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     SizedBox(width: Responsive.w(10)),
                     Expanded(
                       child: Text(
+                        // Stated in theory classes, the smaller of the
+                        // two weights, so acting on it can only leave a
+                        // student better off than the figure promised.
                         isSafe
-                            ? "You are safe! You can skip up to $dynamicCount classes this month without falling below 75%."
-                            : "Critical level: attend the next $dynamicCount consecutive classes to bring your attendance up to 75%.",
+                            ? "You are safe. You can miss up to "
+                                "$dynamicCount more theory classes before "
+                                "falling below 75% — a lab costs more."
+                            : "Below the bar. Attend the next "
+                                "$dynamicCount theory classes to get back "
+                                "to 75%.",
                         style: AppTextStyles.caption.copyWith(
                           color: AppColors.textPrimary,
                           height: 1.4,
