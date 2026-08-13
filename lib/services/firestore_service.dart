@@ -189,7 +189,7 @@ class FirestoreService {
       // 3 = harvested from a continuous scan, quality-weighted, with a
       // scorecard. Version 2 templates came from counted per-pose photos
       // and remain valid to match against.
-      'enrollmentVersion': 3,
+      'enrollmentVersion': AdaptiveFaceService.pipelineVersion,
       'embeddings': verifiedEmbeddings,
       'anchorEmbeddings': anchorEmbeddings,
       'centroid': centroid,
@@ -340,7 +340,7 @@ class FirestoreService {
       'name': name,
       'regNo': regNo,
       'embeddingDimension': 192,
-      'enrollmentVersion': 3,
+      'enrollmentVersion': AdaptiveFaceService.pipelineVersion,
       'embeddings': verifiedEmbeddings,
       'anchorEmbeddings': anchorEmbeddings,
       'centroid': centroid,

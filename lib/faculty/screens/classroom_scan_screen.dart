@@ -252,7 +252,12 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
         final crop = await _cropper.cropFace(frameFile, face);
         if (crop == null) continue;
 
-        final embedding = _embedder.generateEmbedding(crop);
+        // The same flip augmentation enrolment and login use. This was
+        // calling the raw single-pass version, so a classroom scan was
+        // scoring a student against templates built a different way —
+        // consistently lower, against a threshold tuned for the other
+        // path.
+        final embedding = _embedder.generateEmbeddingTTA(crop);
         final sighting =
             _recogniser.identify(embedding: embedding, box: box);
 

@@ -14,11 +14,27 @@ class FaceCandidate {
   /// Fused all-pose vector used for fast prefiltering.
   final List<double> centroid;
 
+  /// Which capture pipeline produced these vectors.
+  ///
+  /// Version 4 is the first with a correct crop. Everything before it
+  /// was aligned by rotating the whole frame and then cropping at the
+  /// pre-rotation coordinates, so the 112x112 the model saw was offset
+  /// by anything up to a whole face width depending on how the phone was
+  /// held. Those vectors describe a region that was partly collar and
+  /// partly wall, and no amount of good lighting will make a correct
+  /// crop match them.
+  final int version;
+
   const FaceCandidate({
     required this.uid,
     required this.poseEmbeddings,
     required this.centroid,
+    this.version = 0,
   });
+
+  /// Enrolled before the crop was fixed, so these vectors cannot be
+  /// compared against anything captured now.
+  bool get isStale => version < AdaptiveFaceService.pipelineVersion;
 
   factory FaceCandidate.fromDoc(String uid, Map<String, dynamic> data) {
     final raw = data['embeddings'];
@@ -47,6 +63,7 @@ class FaceCandidate {
       uid: uid,
       poseEmbeddings: poses,
       centroid: centroid,
+      version: (data['enrollmentVersion'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -83,12 +100,21 @@ class FaceIdentityResult {
 
   final bool accepted;
 
+  /// Every candidate was enrolled before the crop was fixed.
+  ///
+  /// Worth distinguishing from an ordinary mismatch. One is "we do not
+  /// think that is you", which a student should retry; the other is "the
+  /// data we hold about you cannot be used", which no amount of retrying
+  /// will fix and which needs a different sentence on screen.
+  final bool staleEnrollment;
+
   const FaceIdentityResult({
     required this.uid,
     required this.bestPose,
     required this.bestScore,
     required this.margin,
     required this.accepted,
+    this.staleEnrollment = false,
   });
 }
 
@@ -112,6 +138,16 @@ class AdaptiveFaceService {
 
   // ------------------------------------------------------------- tuning
   /// Minimum similarity to accept a match at all.
+  /// The capture pipeline these thresholds assume.
+  ///
+  /// Bumped to 4 when FaceCropService stopped cropping at pre-rotation
+  /// coordinates. Enrollments below this were built from mis-cropped
+  /// images and are not comparable with anything captured since — they
+  /// are reported as stale rather than quietly scoring low, because
+  /// "your face data is out of date, please enrol again" is an
+  /// instruction and "Access Denied" is a mystery.
+  static const int pipelineVersion = 4;
+
   static const double matchThreshold = 0.75;
 
   /// In 1:N mode the winner must beat the runner-up by this much.
@@ -224,6 +260,27 @@ class AdaptiveFaceService {
           uid: null, bestPose: '', bestScore: -1, margin: 0, accepted: false);
     }
 
+    // Enrollments from before the crop fix describe a region that was
+    // partly the person and partly whatever was behind them. Scoring
+    // against them cannot succeed and, worse, a stale template
+    // occasionally scores *high* against the wrong person — the shared
+    // content is background, and two people photographed against the
+    // same wall share it.
+    final usable = candidates.where((c) => !c.isStale).toList();
+
+    if (usable.isEmpty) {
+      return FaceIdentityResult(
+        uid: null,
+        bestPose: '',
+        bestScore: -1,
+        margin: 0,
+        accepted: false,
+        staleEnrollment: true,
+      );
+    }
+
+    candidates = usable;
+
     // Stage 1: centroid prefilter.
     final ranked = candidates
         .map((c) => MapEntry(c, cosine(live, c.centroid)))
@@ -300,6 +357,13 @@ class AdaptiveFaceService {
     required List<double> liveCentroid,
     required List<FaceCandidate> candidates,
   }) {
+    // Stale templates are excluded here too, and for a sharper reason
+    // than at identification. What a mis-cropped template largely
+    // encodes is the wall behind the person — so two students enrolled
+    // in the same room score high against each other, and the duplicate
+    // check would accuse the second one of registering twice.
+    candidates = candidates.where((c) => !c.isStale).toList();
+
     if (candidates.isEmpty) {
       return const DuplicateCheckResult(
           uid: null, bestScore: -1, corroboratingPairs: 0, accepted: false);
@@ -451,7 +515,13 @@ class AdaptiveFaceService {
         'lastMatchedPose': result.bestPose,
         'lastVerifiedAt': FieldValue.serverTimestamp(),
         'reenrollRecommended': reenrollRecommended,
-        'enrollmentVersion': 2,
+        // No 'enrollmentVersion' here. This used to write 2 on every
+        // successful verification, which meant adaptive learning quietly
+        // stamped a *lower* version onto a newer enrollment — harmless
+        // while nothing read the field, and an instant self-inflicted
+        // "your face data is out of date" now that something does. The
+        // version belongs to the capture that produced the vectors and
+        // only enrollment may set it.
       };
 
       if (migrating) {

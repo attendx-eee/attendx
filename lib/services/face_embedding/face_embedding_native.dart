@@ -32,8 +32,13 @@ class FaceEmbeddingService {
   }
 
   List<double> generateEmbedding(img.Image croppedFace) {
-    // 1. Resize to model requirements
-    final resized = img.copyResize(croppedFace, width: 112, height: 112);
+    // 1. Resize to model requirements.
+    //
+    // FaceCropService already hands over 112x112, so this is normally a
+    // no-op — kept as a guard for any caller that doesn't.
+    final resized = croppedFace.width == 112 && croppedFace.height == 112
+        ? croppedFace
+        : img.copyResize(croppedFace, width: 112, height: 112);
 
     // 2. Pre-allocate a 4D Dart List structure matching shape [1, 112, 112, 3]
     var input = List.generate(
@@ -47,14 +52,18 @@ class FaceEmbeddingService {
       ),
     );
 
-    // 3. Populate the 4D array with normalized pixel values
+    // 3. Populate the 4D array with normalized pixel values.
+    //
+    // (x - 127.5) / 128, which is what MobileFaceNet was trained with —
+    // not / 127.5. A small difference, but it is free to get right and
+    // the model has no reason to forgive an input scale it never saw.
     for (int y = 0; y < 112; y++) {
       for (int x = 0; x < 112; x++) {
         final pixel = resized.getPixel(x, y);
 
-        input[0][y][x][0] = (pixel.r - 127.5) / 127.5; // Red
-        input[0][y][x][1] = (pixel.g - 127.5) / 127.5; // Green
-        input[0][y][x][2] = (pixel.b - 127.5) / 127.5; // Blue
+        input[0][y][x][0] = (pixel.r - 127.5) / 128.0; // Red
+        input[0][y][x][1] = (pixel.g - 127.5) / 128.0; // Green
+        input[0][y][x][2] = (pixel.b - 127.5) / 128.0; // Blue
       }
     }
 

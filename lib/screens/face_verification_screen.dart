@@ -453,10 +453,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
               _hasVerificationFailed = true;
               _isFaceAlignedValidly = false;
               _isVerifying = false;
-              _statusMessage = result.bestScore >= 0.75 &&
-                      result.margin < AdaptiveFaceService.identificationMargin
-                  ? "Ambiguous match. Please try again in better light."
-                  : "Biometric Match Mismatch. Access Denied.";
+              _statusMessage = result.staleEnrollment
+                  ? "Your face data was recorded with an older version of "
+                      "the app. Please enroll your face again."
+                  : result.bestScore >= 0.75 &&
+                          result.margin <
+                              AdaptiveFaceService.identificationMargin
+                      ? "Ambiguous match. Please try again in better light."
+                      : "Biometric Match Mismatch. Access Denied.";
             });
           }
         }
