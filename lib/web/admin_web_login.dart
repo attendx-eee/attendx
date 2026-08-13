@@ -6,6 +6,7 @@ import '../core/responsive/responsive.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_radius.dart';
 import '../core/theme/app_text_styles.dart';
+import '../core/widgets/app_logo.dart';
 
 /// Sign-in for the web admin console.
 ///
@@ -101,17 +102,7 @@ class _AdminWebLoginState extends State<AdminWebLogin> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Center(
-                    child: Container(
-                      padding: const EdgeInsets.all(18),
-                      decoration: const BoxDecoration(
-                        gradient: AppColors.brandGradient,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.admin_panel_settings_rounded,
-                          color: Colors.white, size: 34),
-                    ),
-                  ),
+                  const Center(child: AppLogo(size: 84)),
                   const SizedBox(height: 22),
                   Center(
                     child: Text("AttendX Admin",

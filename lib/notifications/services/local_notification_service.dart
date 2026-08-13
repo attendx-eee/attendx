@@ -163,10 +163,18 @@ class LocalNotificationService {
   }
 
   /// Immediately shows a device notification.
+  ///
+  /// [tag] is Android's own de-duplication key, and is set to the source
+  /// document id wherever there is one. Ids only collapse notifications
+  /// this app drew itself; a notification Android drew from an FCM
+  /// payload is outside that numbering, and matching tags is the only
+  /// thing that makes the two land on top of each other rather than
+  /// side by side. The push sender sets the same tag.
   Future<void> showNow({
     required int id,
     required String title,
     required String body,
+    String? tag,
   }) async {
     if (kIsWeb || !_initialized) return;
 
@@ -174,9 +182,18 @@ class LocalNotificationService {
       id,
       title,
       body,
-      const NotificationDetails(
-        android: _alertChannel,
-        iOS: DarwinNotificationDetails(),
+      NotificationDetails(
+        android: tag == null
+            ? _alertChannel
+            : AndroidNotificationDetails(
+                _alertChannel.channelId,
+                _alertChannel.channelName,
+                channelDescription: _alertChannel.channelDescription,
+                importance: _alertChannel.importance,
+                priority: _alertChannel.priority,
+                tag: tag,
+              ),
+        iOS: const DarwinNotificationDetails(),
       ),
     );
   }
@@ -518,6 +535,22 @@ class LocalNotificationService {
     }
   }
 
+  /// Notification ids are derived from the Firestore document id.
+  ///
+  /// Shared with [PushService] on purpose: the same alert can arrive
+  /// twice — once down this listener while the app is open, once as a
+  /// push a few seconds later — and two different ids meant two
+  /// notifications in the tray for one event. Same id, and the second
+  /// quietly replaces the first.
+  static int notificationIdFor(String docId) =>
+      _classReminderIdCeiling + (docId.hashCode % 90000).abs();
+
+  /// Whether the Firestore listener is currently running.
+  ///
+  /// [PushService] checks this before drawing a foreground message. If
+  /// this is live it has already drawn, or is about to.
+  bool get realtimeActive => _realtimeSub != null;
+
   /// Pops a device notification whenever a new notification document
   /// arrives for this student (e.g. a CR timetable change).
   void startRealtimeListener(String uid) {
@@ -544,7 +577,8 @@ class LocalNotificationService {
         if (createdAt.compareTo(listenStart) <= 0) continue;
 
         showNow(
-          id: _classReminderIdCeiling + (change.doc.id.hashCode % 90000).abs(),
+          id: notificationIdFor(change.doc.id),
+          tag: change.doc.id,
           title: data['title'] ?? 'AttendX',
           body: data['body'] ?? '',
         );

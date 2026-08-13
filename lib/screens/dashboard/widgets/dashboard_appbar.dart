@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/responsive/responsive.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_text_styles.dart';
+import '../../../core/widgets/app_logo.dart';
 
 class DashboardAppBar extends StatelessWidget
     implements PreferredSizeWidget {
@@ -57,19 +58,11 @@ class DashboardAppBar extends StatelessWidget
 
             height: Responsive.w(46),
 
-            decoration: BoxDecoration(
+            alignment: Alignment.center,
 
-              color: AppColors.primary.withValues(alpha: .1),
-
-              borderRadius: BorderRadius.circular(
-                Responsive.radius(14),
-              ),
-            ),
-
-            child: Icon(
-              Icons.school_rounded,
-              color: AppColors.primary,
-              size: Responsive.sp(24),
+            child: AppLogo(
+              size: Responsive.w(46),
+              borderRadius: Responsive.radius(14),
             ),
           ),
 

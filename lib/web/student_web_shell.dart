@@ -6,6 +6,7 @@ import '../core/responsive/responsive.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_radius.dart';
 import '../core/theme/app_text_styles.dart';
+import '../core/widgets/app_logo.dart';
 import '../notifications/notification_screen.dart';
 import '../screens/attendance/attendance_screen.dart';
 import '../screens/full_timetable_screen.dart';
@@ -95,14 +96,7 @@ class _StudentWebShellState extends State<StudentWebShell> {
                       width: 40,
                       height: 40,
                       alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [AppColors.primary, AppColors.teal],
-                        ),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(Icons.check_rounded,
-                          color: Colors.white, size: 22),
+                      child: const AppLogo(size: 40, borderRadius: 12),
                     ),
                   ],
                 ),

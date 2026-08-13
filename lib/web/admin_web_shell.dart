@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../core/widgets/app_logo.dart';
 import '../admin/master_data/master_home.dart';
 import '../admin/screens/attendance_analysis_screen.dart';
 import '../admin/screens/attendance_insights_screen.dart';
@@ -210,15 +211,7 @@ class _AdminWebShellState extends State<AdminWebShell> {
             padding: const EdgeInsets.fromLTRB(20, 26, 20, 22),
             child: Row(
               children: [
-                Container(
-                  padding: const EdgeInsets.all(9),
-                  decoration: const BoxDecoration(
-                    gradient: AppColors.brandGradient,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.check_rounded,
-                      color: Colors.white, size: 18),
-                ),
+                const AppLogo(size: 38),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(

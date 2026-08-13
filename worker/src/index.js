@@ -296,6 +296,7 @@ async function sendToToken(env, accessToken, deviceToken, title, body, data) {
               body,
               category: String(data.category || "general"),
               action: String(data.action || ""),
+              id: String(data.id || ""),
             },
 
             android: {
@@ -305,7 +306,14 @@ async function sendToToken(env, accessToken, deviceToken, title, body, data) {
                 // LocalNotificationService.init and declared in the
                 // manifest, or API 26+ discards it in silence.
                 channel_id: "realtime_alerts",
-                tag: String(data.category || "general"),
+                // The source document, not the category. Android
+                // replaces a notification carrying the same tag, and
+                // the app draws its own copy under this tag too — so
+                // when the app is alive in the background and both fire
+                // for one event, the tray shows one alert, not two.
+                // Tagging by category was worse than useless: two
+                // unrelated attendance alerts would replace each other.
+                tag: String(data.id || data.category || "general"),
               },
             },
 
@@ -363,6 +371,12 @@ async function sweep(env) {
     const meta = {
       category: plain(doc.fields.category),
       action: plain(doc.fields.action),
+      // The Firestore document id, so the app can draw this push under
+      // the same notification id its own listener would have used. When
+      // both paths fire — the app was open, and the push arrived anyway
+      // — the second one replaces the first instead of stacking a
+      // duplicate in the tray.
+      id: doc.name.split("/").pop(),
     };
 
     const alive = [];

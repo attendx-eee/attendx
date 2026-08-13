@@ -60,10 +60,6 @@ class PushService {
       // keeps a dead token and silently stops receiving anything.
       messaging.onTokenRefresh.listen((fresh) => _saveToken(uid, fresh));
 
-      // Foreground messages don't raise a notification on their own, so
-      // the payload is handed to the local plugin to draw. Sent as
-      // data-only from the function precisely so this is the single
-      // place that decides how a message looks.
       FirebaseMessaging.onMessage.listen(_show);
 
       _started = true;
@@ -72,16 +68,41 @@ class PushService {
     }
   }
 
+  /// What to draw for a message that lands while the app is open.
+  ///
+  /// Usually nothing. Every push has a Firestore document behind it, and
+  /// while the app is running [LocalNotificationService]'s listener is
+  /// watching that collection — so both paths were firing for one event
+  /// and the student got the same alert twice, seconds apart. The
+  /// listener is the better of the two: it has the whole document, it
+  /// fires the moment the write lands rather than up to a minute later,
+  /// and it works whether or not a push token was ever registered.
+  ///
+  /// So while the listener is live, push stays quiet in the foreground
+  /// and does the job it is actually needed for — reaching a phone whose
+  /// app is closed, where nothing else can.
+  ///
+  /// If the listener is not running, this draws after all. Signed out,
+  /// permission refused, the stream dropped — a missing notification
+  /// would be worse than a duplicated one.
   Future<void> _show(RemoteMessage message) async {
+    if (LocalNotificationService.instance.realtimeActive) return;
+
     final title = message.data['title'] ?? message.notification?.title;
     final body = message.data['body'] ?? message.notification?.body;
 
     if (title == null && body == null) return;
 
+    // The document id, where the sender supplied one, so this lands on
+    // the same notification the listener would have drawn instead of
+    // beside it. Falls back to the message id.
+    final docId = (message.data['id'] ?? '').toString();
+
     await LocalNotificationService.instance.showNow(
-      // Derived from the message id so the same push arriving twice
-      // replaces itself instead of stacking.
-      id: 500000 + (message.messageId.hashCode % 400000).abs(),
+      id: docId.isNotEmpty
+          ? LocalNotificationService.notificationIdFor(docId)
+          : 500000 + (message.messageId.hashCode % 400000).abs(),
+      tag: docId.isEmpty ? null : docId,
       title: title ?? 'AttendX',
       body: body ?? '',
     );

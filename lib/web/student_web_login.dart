@@ -5,6 +5,7 @@ import '../core/responsive/responsive.dart';
 import '../core/theme/app_colors.dart';
 import '../core/theme/app_radius.dart';
 import '../core/theme/app_text_styles.dart';
+import '../core/widgets/app_logo.dart';
 
 /// Email and password only.
 ///
@@ -120,18 +121,8 @@ class _StudentWebLoginState extends State<StudentWebLogin> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Container(
-                    width: 62,
-                    height: 62,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [AppColors.primary, AppColors.teal],
-                      ),
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: const Icon(Icons.check_rounded,
-                        color: Colors.white, size: 34),
+                  const Center(
+                    child: AppLogo(size: 76, borderRadius: 20),
                   ),
                   const SizedBox(height: 18),
                   Text('AttendX',
