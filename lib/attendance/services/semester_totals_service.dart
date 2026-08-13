@@ -9,6 +9,8 @@ import '../../faculty/services/period_attendance_service.dart';
 import '../../services/attendance_service.dart';
 import '../../timetable/services/schedule_resolver.dart';
 import '../models/day_summary.dart';
+import '../models/manual_attendance_model.dart';
+import 'manual_attendance_service.dart';
 
 /// What a month has on the timetable, ahead of anyone marking anything.
 ///
@@ -48,10 +50,18 @@ class _MonthContext {
   /// dateId -> periodNo -> what was marked.
   final Map<String, Map<int, PeriodAttendance>> records;
 
+  /// uid -> dateId -> the day-level mark an admin or CR made by hand.
+  ///
+  /// Fetched for the whole year group in one query, because every
+  /// student needs their own and going one at a time would put sixty
+  /// round trips back into a screen that just had them removed.
+  final Map<String, Map<String, ManualAttendance>> manual;
+
   const _MonthContext({
     required this.days,
     required this.periods,
     required this.records,
+    required this.manual,
   });
 }
 
@@ -211,6 +221,22 @@ class SemesterTotalsService {
       byDate.putIfAbsent(r.date, () => {})[r.periodNo] = r;
     }
 
+    // Day-level marks for the whole year group. These are what an admin
+    // sets on the calendar, and until now they reached the calendar
+    // colours and nothing else — a month marked present by hand totalled
+    // zero classes held.
+    var manual = <String, Map<String, ManualAttendance>>{};
+    try {
+      manual = await ManualAttendanceService.instance.forMonth(
+        department: department,
+        year: year,
+        monthId: '${month.year}-'
+            '${month.month.toString().padLeft(2, '0')}',
+      );
+    } catch (e) {
+      debugPrint('Manual marks fetch failed: $e');
+    }
+
     // One query for the month's cancellations and extra classes, rather
     // than one per day. Without this a cancelled class still counts
     // against the whole year, and a class the CR added in a free period
@@ -250,7 +276,13 @@ class SemesterTotalsService {
       periods[AppConfig.dateId(date)] = resolved;
     }
 
-    final ctx = _MonthContext(days: days, periods: periods, records: byDate);
+    final ctx = _MonthContext(
+      days: days,
+      periods: periods,
+      records: byDate,
+      manual: manual,
+    );
+
     _contexts[key] = ctx;
 
     return ctx;
@@ -267,6 +299,8 @@ class SemesterTotalsService {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
 
+    final marks = ctx.manual[uid];
+
     for (final date in ctx.days) {
       if (date.isAfter(today)) break;
 
@@ -278,6 +312,7 @@ class SemesterTotalsService {
         periods: ctx.periods[id] ?? const [],
         records: ctx.records[id] ?? const {},
         studentBatch: batch,
+        dayStatus: marks?[id]?.status,
       ));
     }
 

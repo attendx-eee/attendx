@@ -1,8 +1,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../admin/models/period_model.dart';
 import '../../admin/services/holiday_service.dart';
 import '../../attendance/models/day_summary.dart';
+import '../../attendance/models/manual_attendance_model.dart';
+import '../../attendance/services/manual_attendance_service.dart';
 import '../../services/attendance_service.dart';
 import '../../core/constants/app_config.dart';
 import '../../notifications/services/notification_service.dart';
@@ -351,6 +354,17 @@ class PeriodAttendanceService {
       byDate.putIfAbsent(r.date, () => {})[r.periodNo] = r;
     }
 
+    // Day-level marks, so a day an admin marked present shows its
+    // classes as attended rather than as an unmarked 0/2. This drives
+    // the calendar tiles, and a tile reading 0/2 under a card that
+    // counted those two classes is the same disagreement in miniature.
+    var manual = <String, ManualAttendance>{};
+    try {
+      manual = await ManualAttendanceService.instance.forStudent(uid);
+    } catch (e) {
+      debugPrint('Manual marks fetch failed: $e');
+    }
+
     await HolidayService.instance.all();
 
     final daysInMonth = DateTime(calendarYear, month + 1, 0).day;
@@ -375,6 +389,7 @@ class PeriodAttendanceService {
         periods: periods,
         records: byDate[AppConfig.dateId(date)] ?? const {},
         studentBatch: batch,
+        dayStatus: manual[AppConfig.dateId(date)]?.status,
       );
 
       days[d] = summary;

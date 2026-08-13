@@ -1,5 +1,6 @@
 import '../../admin/models/period_model.dart';
 import '../../faculty/models/period_attendance.dart';
+import 'manual_attendance_model.dart';
 
 /// How much of a day a student actually attended.
 enum DayAttendance {
@@ -228,12 +229,28 @@ class DaySummaryBuilder {
   ///
   /// [studentBatch] filters lab periods: a lab for batch B says nothing
   /// about a student in batch A, who wasn't expected there.
+  ///
+  /// [dayStatus] is a day-level mark somebody made by hand — one of
+  /// [ManualAttendanceStatus]'s values, or null.
+  ///
+  /// That last one was missing, and it cost a whole month. An admin who
+  /// marked a student present for every day of July was making a
+  /// statement about roughly fifty classes, and none of them were being
+  /// counted: the day went green on the calendar and the totals read
+  /// "0 held". Only per-period registers reached the arithmetic, so a
+  /// month of hand-marked attendance was worth nothing at all.
+  ///
+  /// A period register still wins wherever one exists — it is the finer
+  /// record and the more recent decision. The day mark only fills the
+  /// periods nobody registered, which is what it was always meant to
+  /// mean: *this student was, or was not, in class that day*.
   static DaySummary build({
     required DateTime date,
     required String uid,
     required List<PeriodModel> periods,
     required Map<int, PeriodAttendance> records,
     String studentBatch = '',
+    String? dayStatus,
   }) {
     var theoryAttended = 0, theoryTotal = 0, theoryUnmarked = 0;
     var labAttended = 0, labTotal = 0, labUnmarked = 0;
@@ -259,13 +276,28 @@ class DaySummaryBuilder {
       final record = records[period.periodNo];
 
       // A record scoped to other students says nothing about this one,
-      // so it counts as unmarked rather than as an absence.
+      // so it falls through to the day mark, and failing that counts as
+      // unmarked rather than as an absence.
       if (record == null || !record.covers(uid)) {
-        if (isLab) {
-          labUnmarked++;
-        } else {
-          theoryUnmarked++;
+        if (dayStatus == null) {
+          if (isLab) {
+            labUnmarked++;
+          } else {
+            theoryUnmarked++;
+          }
+          continue;
         }
+
+        // Late is present. It is tracked separately for punctuality, but
+        // a student who arrived late was still in the class.
+        if (dayStatus != ManualAttendanceStatus.absent) {
+          if (isLab) {
+            labAttended++;
+          } else {
+            theoryAttended++;
+          }
+        }
+
         continue;
       }
 

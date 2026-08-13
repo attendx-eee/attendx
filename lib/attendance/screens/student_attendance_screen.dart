@@ -85,6 +85,15 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
   Map<int, DayVerdict>? _verdicts;
   String? _verdictKey;
 
+  /// Fingerprint of the manual marks behind the last pass.
+  ///
+  /// The totals cache holds a resolved month, day marks included. When a
+  /// mark changes — here, or on another admin's screen, since these
+  /// arrive over a live stream — that month has to be forgotten or the
+  /// calendar would show the new mark while the card above it kept
+  /// quoting the old figures.
+  String? _marksKey;
+
   /// Per-class counts for the visible month, keyed by day-of-month.
   ///
   /// Loaded alongside the verdicts rather than folded into them: a
@@ -174,10 +183,20 @@ class _StudentAttendanceScreenState extends State<StudentAttendanceScreen> {
         .map((e) => '${e.key}:${e.value.status}')
         .toList()
       ..sort();
-    final key = '$_monthId|$_periodRevision|${marks.join(',')}';
+    final marksKey = marks.join(',');
+    final key = '$_monthId|$_periodRevision|$marksKey';
 
     if (key == _verdictKey) return;
     _verdictKey = key;
+
+    if (_marksKey != null && _marksKey != marksKey) {
+      SemesterTotalsService.instance.invalidateMonth(
+        department: AppConfig.departmentOf(widget.studentData),
+        year: _studentYear,
+        month: _visibleMonth,
+      );
+    }
+    _marksKey = marksKey;
 
     AttendanceService.instance
         .monthVerdicts(

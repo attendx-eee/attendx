@@ -46,6 +46,37 @@ class ManualAttendanceService {
         );
   }
 
+  /// A whole year group's marks for one month: uid -> date id -> mark.
+  ///
+  /// One query for everybody, because the attendance totals need these
+  /// alongside the period registers and fetching them per student would
+  /// put sixty round trips back into a screen that just had them taken
+  /// out.
+  ///
+  /// Three equality filters and no ordering, so Firestore serves it by
+  /// merging the single-field indexes it maintains automatically — no
+  /// composite index to create or deploy.
+  Future<Map<String, Map<String, ManualAttendance>>> forMonth({
+    required String department,
+    required int year,
+    required String monthId,
+  }) async {
+    final snapshot = await _collection
+        .where('department', isEqualTo: department)
+        .where('year', isEqualTo: year)
+        .where('month', isEqualTo: monthId)
+        .get();
+
+    final out = <String, Map<String, ManualAttendance>>{};
+
+    for (final doc in snapshot.docs) {
+      final mark = ManualAttendance.fromFirestore(doc);
+      out.putIfAbsent(mark.uid, () => {})[mark.date] = mark;
+    }
+
+    return out;
+  }
+
   /// All manual marks on one date, keyed by student uid (admin insights).
   Future<Map<String, ManualAttendance>> onDate(String dateId) async {
     final snapshot = await _collection.where('date', isEqualTo: dateId).get();
