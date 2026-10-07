@@ -210,14 +210,33 @@ class _ReleaseAnnounceScreenState extends State<ReleaseAnnounceScreen> {
 
                   Text(
                     'This console is running ${AppConfig.appVersion}. '
-                    'Upload the APK to the website first — announcing a '
-                    'version whose file is not live yet sends everyone '
-                    'to a 404.',
+                    'Publish the GitHub release and attach the APK to it '
+                    'first — announcing a version whose file is not live '
+                    'yet sends everyone to a 404.',
                     style: AppTextStyles.caption,
+                  ),
+                  SizedBox(height: Responsive.h(10)),
+                  Container(
+                    padding: Responsive.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: .07),
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                    ),
+                    child: Text(
+                      'The APK lives on the repository’s Releases page, '
+                      'not in the website folder. GitHub refuses any file '
+                      'over 100MB inside a repository, and a build carrying '
+                      'every CPU architecture comes to about 144MB — so the '
+                      'release is built with --split-per-abi and the arm64 '
+                      'file attached to a release tagged for the version. '
+                      'Releases allow 2GB and are not re-uploaded on every '
+                      'deploy the way the website folder is.',
+                      style: AppTextStyles.caption,
+                    ),
                   ),
                   SizedBox(height: Responsive.h(18)),
 
-                  _field(_version, 'Version', 'e.g. 1.2.6',
+                  _field(_version, 'Version', 'e.g. 1.2.8',
                       Icons.tag_rounded),
                   SizedBox(height: Responsive.h(12)),
                   _field(_versionCode, 'Version code',
@@ -225,7 +244,11 @@ class _ReleaseAnnounceScreenState extends State<ReleaseAnnounceScreen> {
                       Icons.numbers_rounded,
                       numeric: true),
                   SizedBox(height: Responsive.h(12)),
-                  _field(_apkUrl, 'APK link', 'https://…/attendx-v1.2.6.apk',
+                  _field(
+                      _apkUrl,
+                      'APK link',
+                      'https://github.com/attendx-eee/attendx/releases/'
+                          'download/v1.2.8/attendx-v1.2.8.apk',
                       Icons.link_rounded),
                   SizedBox(height: Responsive.h(12)),
                   _field(_notes, "What's new", 'Shown in the notification',
