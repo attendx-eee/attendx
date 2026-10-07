@@ -155,6 +155,18 @@ class ClassroomRecognitionService {
 
   int get gallerySize => _gallery.length;
 
+  /// Templates built before the crop fix, which cannot be matched.
+  ///
+  /// Worth counting and saying out loud. A stale template is not scored
+  /// badly, it is refused outright — so a class where everybody enrolled
+  /// on an older build recognises nobody at all, and the lecturer sees
+  /// grey boxes with no explanation and concludes the camera is broken.
+  /// It is not; it has nothing to compare against.
+  int get staleCount => _gallery.where((c) => c.isStale).length;
+
+  /// Templates that can actually be matched.
+  int get usableCount => _gallery.length - staleCount;
+
   /// Everyone confirmed so far, best matches first.
   List<Sighting> get confirmed {
     final list = _sightings.values.where((s) => s.confirmed).toList()

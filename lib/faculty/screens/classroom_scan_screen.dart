@@ -804,6 +804,42 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
                       ],
                     ),
                     const SizedBox(height: 8),
+
+                    // Says why, when the answer is going to be nobody.
+                    //
+                    // A template enrolled before the crop fix is refused
+                    // outright rather than scored low, so a class where
+                    // everyone enrolled on an older build recognises
+                    // nobody — grey box after grey box, with the obvious
+                    // conclusion being that the camera is broken. It is
+                    // not. It has nothing to compare against, and that
+                    // is a sentence worth putting on the screen.
+                    if (_recogniser.staleCount > 0)
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 9),
+                        decoration: BoxDecoration(
+                          color: AppColors.warning.withValues(alpha: .22),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          _recogniser.usableCount == 0
+                              ? 'None of these ${_recogniser.staleCount} '
+                                  'students can be recognised yet — they all '
+                                  'enrolled before the last update. Ask them '
+                                  'to open Settings → Update Biometrics. '
+                                  'Mark the class by hand on the next screen.'
+                              : '${_recogniser.staleCount} of '
+                                  '${_recogniser.gallerySize} students '
+                                  'enrolled before the last update and cannot '
+                                  'be recognised until they enrol again.',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 11.5),
+                        ),
+                      ),
+
                     const Text(
                       'Sweep slowly across the room. Anyone missed can be '
                       'ticked on the next screen.',

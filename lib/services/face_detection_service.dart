@@ -50,8 +50,15 @@ class FaceDetectionService {
   FaceDetectionService.classroom()
       : detector = FaceDetector(
           options: FaceDetectorOptions(
+            // Accurate mode at a 0.05 floor was measured at 719ms a
+            // frame on a debug build — unusable, and the detector was
+            // the largest single share of it. 0.07 cuts most of the
+            // scale pyramid accurate mode has to search while staying
+            // below the recogniser's 0.055 working limit once the
+            // capture is at 1080p or better, which is where the auto
+            // tuning puts it whenever the phone can hold the pace.
             performanceMode: FaceDetectorMode.accurate,
-            minFaceSize: 0.05,
+            minFaceSize: 0.07,
             enableLandmarks: true,
             enableClassification: false,
             enableTracking: true,
