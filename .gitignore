@@ -58,3 +58,12 @@ worker/.dev.vars
 # Presentation build script and its output — not part of the app
 build_deck.py
 AttendX-Overview.pptx
+
+# Project report and its build script — about the app, not part of it
+build_report.js
+AttendX-Project-Report.docx
+AttendX-Project-Report.pdf
+report_figs/
+
+# Service account for tools/publish_release.mjs. Never commit this.
+.env
