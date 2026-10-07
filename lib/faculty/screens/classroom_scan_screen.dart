@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:camera/camera.dart';
@@ -242,28 +243,68 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
       orElse: () => cameras.first,
     );
 
-    // Resolution is not a nicety here, it is the whole problem.
+    // Start at 1920 and earn the way up.
     //
-    // A face is about 16cm across. Through a typical phone's rear lens
-    // at 3.5 metres — the second row — it lands on roughly 76 pixels of
-    // a 1920-wide frame, and the embedder needs about 106 to say
-    // anything trustworthy. At 1920 the camera physically cannot resolve
-    // past the front row of a classroom, whatever the model does
-    // afterwards. Doubling the width doubles every one of those figures:
-    // the second row becomes 152px, the third 118px.
+    // Resolution is the thing that decides whether a face at the back
+    // carries enough pixels to identify, so more is genuinely better —
+    // but only if the phone can keep up. At 4K each frame is a 12MB
+    // buffer, the JPEG encode and decode quadruple, and ML Kit in
+    // accurate mode at a 0.05 minimum face size has four times the
+    // picture to search. Measured end to end that is most of a second
+    // per frame, which during a sweep means faces blur past between
+    // frames and the tracking that carries a decision forward breaks
+    // constantly. A 4K scan that manages one frame a second identifies
+    // fewer people than a 1920 scan managing five.
     //
-    // Falls back rather than failing. Not every phone offers 4K on the
-    // rear camera, and a scan at 1920 is worth far more than a scan that
-    // would not start.
-    for (final preset in [
-      ResolutionPreset.ultraHigh,
-      ResolutionPreset.veryHigh,
-      ResolutionPreset.high,
-    ]) {
+    // So this starts where it is known to work and [_tuneQuality] steps
+    // it up once the phone has shown it has the headroom, and back down
+    // if it does not. Guessing from the spec sheet is how you ship a
+    // scan that works on the phone it was written on.
+    await _openCamera(back, _preset);
+    if (_camera == null) return;
+
+    if (!mounted) return;
+
+    setState(() => _cameraReady = true);
+    await _camera!.startImageStream(_onFrame);
+  }
+
+  /// Presets this will move between, cheapest first.
+  static const List<ResolutionPreset> _ladder = [
+    ResolutionPreset.high, // 1280 — the floor; below this nothing works
+    ResolutionPreset.veryHigh, // 1920 — the default
+    ResolutionPreset.ultraHigh, // 3840 — only if the phone keeps up
+  ];
+
+  /// Index into [_ladder]. Starts at veryHigh.
+  int _preset = 1;
+
+  CameraDescription? _lens;
+
+  /// How long recent frames took, end to end.
+  final List<int> _frameMs = [];
+
+  /// Rolling average, or null before there is enough to judge.
+  int? get _avgFrameMs => _frameMs.length < 6
+      ? null
+      : _frameMs.reduce((a, b) => a + b) ~/ _frameMs.length;
+
+  bool _retuning = false;
+
+  String _presetLabel() => switch (_ladder[_preset]) {
+        ResolutionPreset.ultraHigh => '4K',
+        ResolutionPreset.veryHigh => '1080p',
+        _ => '720p',
+      };
+
+  Future<void> _openCamera(CameraDescription lens, int preset) async {
+    _lens = lens;
+
+    for (var i = preset; i >= 0; i--) {
       try {
         _camera = CameraController(
-          back,
-          preset,
+          lens,
+          _ladder[i],
           enableAudio: false,
           imageFormatGroup: Platform.isAndroid
               ? ImageFormatGroup.nv21
@@ -271,23 +312,60 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
         );
 
         await _camera!.initialize();
-        break;
+        _preset = i;
+        return;
       } catch (e) {
-        debugPrint('Camera preset $preset unavailable: $e');
+        // Plenty of phones advertise 4K for recording and refuse it for
+        // an image stream. Stepping down beats failing.
+        debugPrint('Preset ${_ladder[i]} unavailable: $e');
         await _camera?.dispose();
         _camera = null;
       }
     }
 
-    if (_camera == null) {
-      if (mounted) setState(() => _error = "Couldn't start the camera.");
-      return;
+    if (mounted) setState(() => _error = "Couldn't start the camera.");
+  }
+
+  /// Moves the capture up or down a rung based on what the phone is
+  /// actually managing.
+  ///
+  /// The budget is the frame stride: the stream delivers about 30 frames
+  /// a second and every sixth is processed, so there are roughly 200ms
+  /// to play with. Consistently over that and frames are being dropped
+  /// by the busy guard rather than the stride, which is the state where
+  /// a sweep loses tracking. Comfortably under it and there is detail
+  /// going spare that the back rows could use.
+  Future<void> _tuneQuality() async {
+    if (_retuning || !mounted) return;
+
+    final avg = _avgFrameMs;
+    if (avg == null) return;
+
+    final tooSlow = avg > 320 && _preset > 0;
+    final roomToSpare = avg < 110 && _preset < _ladder.length - 1;
+
+    if (!tooSlow && !roomToSpare) return;
+
+    _retuning = true;
+    final target = tooSlow ? _preset - 1 : _preset + 1;
+
+    try {
+      await _camera?.stopImageStream();
+      await _camera?.dispose();
+      _camera = null;
+
+      await _openCamera(_lens!, target);
+
+      if (_camera != null && mounted) {
+        _frameMs.clear();
+        await _camera!.startImageStream(_onFrame);
+        setState(() {});
+      }
+    } catch (e) {
+      debugPrint('Could not change capture quality: $e');
+    } finally {
+      _retuning = false;
     }
-
-    if (!mounted) return;
-
-    setState(() => _cameraReady = true);
-    await _camera!.startImageStream(_onFrame);
   }
 
   Future<void> _onFrame(CameraImage image) async {
@@ -297,6 +375,7 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
     if (_frameCounter % _frameStride != 0) return;
 
     _busy = true;
+    final started = DateTime.now();
 
     try {
       final input = _toInputImage(image);
@@ -418,6 +497,14 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
       debugPrint('Classroom frame skipped: $e');
     } finally {
       _busy = false;
+
+      // Measured around everything: detection, decode, crops and
+      // embeddings. A figure that leaves any of those out would flatter
+      // the settings that cost the most.
+      _frameMs.add(DateTime.now().difference(started).inMilliseconds);
+      if (_frameMs.length > 12) _frameMs.removeAt(0);
+
+      unawaited(_tuneQuality());
     }
   }
 
@@ -700,8 +787,17 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
                             ),
                           ),
                         ),
+                        // The capture width and how long a frame is
+                        // taking. Visible on purpose during the trial:
+                        // the whole question of whether this works in a
+                        // real room is answered by these two numbers on
+                        // the phones the department actually owns, not
+                        // by arithmetic about lens geometry.
                         Text(
-                          '$_framesProcessed frames',
+                          _avgFrameMs == null
+                              ? '$_framesProcessed frames'
+                              : '$_framesProcessed frames · '
+                                  '${_presetLabel()} · ${_avgFrameMs}ms',
                           style: const TextStyle(
                               color: Colors.white38, fontSize: 11),
                         ),
