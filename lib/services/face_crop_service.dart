@@ -82,8 +82,19 @@ class FaceCropService {
     final original = img.decodeImage(bytes);
     if (original == null) return null;
 
-    final aligned = alignFromLandmarks(original, face) ??
-        _boundingBoxFallback(original, face);
+    return cropFromImage(original, face);
+  }
+
+  /// The same crop, from an image already in memory.
+  ///
+  /// The classroom sweep needs this. Going through [cropFace] there made
+  /// it read and decode the whole 1920x1080 frame once *per face* — in a
+  /// room with twenty visible faces, twenty full decodes for twenty
+  /// 112x112 crops, all of the same picture. The caller decodes once and
+  /// calls this for each face instead.
+  img.Image? cropFromImage(img.Image source, Face face) {
+    final aligned = alignFromLandmarks(source, face) ??
+        _boundingBoxFallback(source, face);
 
     if (aligned == null) return null;
 

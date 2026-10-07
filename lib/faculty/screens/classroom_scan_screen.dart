@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:image/image.dart' as img;
 
 import '../../admin/models/period_model.dart';
 import '../../core/constants/app_config.dart';
@@ -78,9 +79,20 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
   static const int _frameStride = 6;
   int _frameCounter = 0;
 
+  /// How many faces are put through the embedder on one frame.
+  ///
+  /// Each costs a TFLite inference, and a roomful of faces would spend
+  /// most of a second on a single frame while the camera carried on
+  /// moving. Capping it keeps the preview live; the faces that miss out
+  /// are picked up on the frames that follow, which is invisible during
+  /// a sweep that lasts seconds.
+  static const int _embeddingsPerFrame = 5;
+
   @override
   void initState() {
     super.initState();
+    // Normally already loaded at launch; this covers a slow or failed load.
+    _embedder.initialize();
     _prepare();
   }
 
@@ -206,8 +218,18 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
               ? image.height.toDouble()
               : image.width.toDouble();
 
+      _recogniser.beginFrame();
+
       final labels = <FaceLabel>[];
-      File? frameFile;
+
+      // Faces still needing an embedding, biggest first.
+      //
+      // Twenty visible faces is twenty TFLite inferences, and a sweep
+      // cannot wait for all of them — the camera has moved on. The
+      // nearest faces carry the most pixels and resolve on the fewest
+      // frames, so they go first and the rest come round on the next
+      // pass. Nobody is dropped; they are deferred.
+      final pending = <({Face face, Rect box})>[];
 
       for (final face in faces) {
         final box = const CameraCoordinateTransformer().transformRect(
@@ -229,44 +251,65 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
           continue;
         }
 
-        // Already counted and hasn't moved — skip the expensive part.
-        // Most of a scan is the same seated people frame after frame.
-        final known = _recogniser.confirmedNear(box);
+        // Already resolved and still being tracked — no embedding, no
+        // second count. This is what makes the sweep back across the
+        // room cheap: it spends its effort on whoever is still
+        // unaccounted for.
+        final known =
+            _recogniser.seen(trackingId: face.trackingId, box: box);
+
         if (known != null) {
-          known.lastBox = box;
-          known.lastSeen = DateTime.now();
           labels.add(FaceLabel(
             box: box,
             name: known.name,
-            confirmed: true,
+            confirmed: known.confirmed,
             score: known.bestScore,
           ));
           continue;
         }
 
-        // The whole frame is written once and cropped many times — one
-        // JPEG encode per frame instead of one per face.
-        frameFile ??= await _toFile(image);
-        if (frameFile == null) continue;
+        pending.add((face: face, box: box));
+      }
 
-        final crop = await _cropper.cropFace(frameFile, face);
+      pending.sort((a, b) => b.box.width.compareTo(a.box.width));
+
+      // One decode per frame, shared by every crop taken from it. This
+      // used to encode a JPEG, write it to disk and then decode that
+      // whole file again for each face — twenty decodes of the same
+      // 1920x1080 picture to produce twenty 112x112 crops.
+      img.Image? frame;
+
+      for (final entry in pending.take(_embeddingsPerFrame)) {
+        frame ??= await _decodeFrame(image);
+        if (frame == null) break;
+
+        final crop = _cropper.cropFromImage(frame, entry.face);
         if (crop == null) continue;
 
-        // The same flip augmentation enrolment and login use. This was
-        // calling the raw single-pass version, so a classroom scan was
-        // scoring a student against templates built a different way —
-        // consistently lower, against a threshold tuned for the other
-        // path.
+        // The same flip augmentation enrolment and login use, so a
+        // classroom probe is built the way the templates it is scored
+        // against were built.
         final embedding = _embedder.generateEmbeddingTTA(crop);
-        final sighting =
-            _recogniser.identify(embedding: embedding, box: box);
+
+        final sighting = _recogniser.identify(
+          embedding: embedding,
+          box: entry.box,
+          trackingId: entry.face.trackingId,
+        );
 
         labels.add(FaceLabel(
-          box: box,
+          box: entry.box,
           name: sighting?.name,
           confirmed: sighting?.confirmed ?? false,
           score: sighting?.bestScore ?? 0,
         ));
+      }
+
+      // Anything the budget did not reach is still drawn, so the
+      // lecturer sees the camera has noticed it.
+      for (final entry in pending.skip(_embeddingsPerFrame)) {
+        labels.add(FaceLabel(
+            box: entry.box, name: null, confirmed: false, score: 0));
       }
 
       _framesProcessed++;
@@ -279,16 +322,16 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
     }
   }
 
-  /// Reused every frame rather than a new timestamped file each time.
-  /// A classroom sweep runs for minutes and encodes one JPEG per
-  /// processed frame; timestamped paths would fill temp storage.
-  late final String _scratchPath =
-      '${Directory.systemTemp.path}/attendx_class_scratch.jpg';
-
-  Future<File?> _toFile(CameraImage image) async {
+  /// The camera frame as an image the cropper can read, decoded once.
+  ///
+  /// This used to encode a JPEG, write it to a scratch file, and hand
+  /// the path to the cropper — which then read and decoded that file
+  /// again for every single face. The encode still happens on a
+  /// background isolate, where it belongs, but the result is decoded
+  /// once here and shared by every crop taken from the frame. Nothing
+  /// touches the disk.
+  Future<img.Image?> _decodeFrame(CameraImage image) async {
     try {
-      final path = _scratchPath;
-
       final planes = image.planes
           .map((p) => {
                 'bytes': p.bytes,
@@ -309,11 +352,9 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
 
       if (jpeg == null) return null;
 
-      final file = File(path);
-      await file.writeAsBytes(jpeg);
-      return file;
+      return img.decodeImage(jpeg);
     } catch (e) {
-      debugPrint('Frame encode failed: $e');
+      debugPrint('Frame decode failed: $e');
       return null;
     }
   }
@@ -412,14 +453,10 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
     _camera?.dispose();
     _recogniser.dispose();
 
-    // A frame of a classroom full of students shouldn't outlive the scan.
-    try {
-      final scratch = File(_scratchPath);
-      if (scratch.existsSync()) scratch.deleteSync();
-    } catch (_) {
-      // Best effort.
-    }
-
+    // No scratch file to delete any more. Frames used to be written to
+    // temp storage so the cropper could read them back, which meant a
+    // photograph of a classroom full of students sat on disk for the
+    // length of the scan. They never leave memory now.
     super.dispose();
   }
 

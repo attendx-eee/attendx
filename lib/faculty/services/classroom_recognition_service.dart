@@ -36,6 +36,36 @@ class Sighting {
   bool get confirmed => hits >= ClassroomRecognitionService.confirmHits;
 }
 
+/// One face followed across frames.
+///
+/// ML Kit assigns a tracking id to each face it follows, and keeps it
+/// while that face stays in view. That is what lets the sweep stop
+/// re-recognising somebody it has already decided about: the expensive
+/// part of a frame is the embedding, and a face whose track is resolved
+/// needs no embedding at all.
+///
+/// Evidence accumulates per track and must agree. A track that matches
+/// three different students across three frames is a track producing
+/// noise, and noise should not mark anybody present.
+class _Track {
+  /// Who this track currently looks like.
+  String? uid;
+
+  /// Frames in a row that agreed on [uid].
+  int agreeing = 0;
+
+  double bestScore = 0;
+
+  /// Resolved — stop embedding this face.
+  bool locked = false;
+
+  Rect box;
+  DateTime lastSeen;
+
+  _Track({required this.box, DateTime? lastSeen})
+      : lastSeen = lastSeen ?? DateTime.now();
+}
+
 /// What to draw over one face in the preview.
 class FaceLabel {
   final Rect box;
@@ -59,30 +89,35 @@ class FaceLabel {
 /// Built on the model the app already ships — ML Kit for detection, the
 /// TFLite embedder, and [AdaptiveFaceService] for matching. Nothing new
 /// is trained. What's new is everything around it, because recognising
-/// one cooperative face at arm's length and recognising thirty faces
+/// one cooperative face at arm's length and recognising eighty faces
 /// across a room are different problems:
 ///
 /// - **The gallery is loaded once.** Matching re-reads no Firestore; the
 ///   year's templates sit in memory for the whole scan.
-/// - **Small faces are skipped.** Published classroom systems lose
-///   accuracy badly past a few metres, and a face 20px wide produces an
-///   embedding that is essentially noise — noise that will still match
-///   *somebody* at 0.75. Refusing to guess is better than guessing
-///   wrong.
+/// - **Small faces are skipped.** A face 20px wide produces an embedding
+///   that is essentially noise — noise that will still match *somebody*.
+///   Refusing to guess is better than guessing wrong.
 /// - **Nobody is marked present on one frame.** A student must be
-///   matched in several separate frames before they count. A single
-///   frame is a coin toss at classroom distances; agreement across
-///   frames is not.
+///   matched in several frames, and those frames must agree, before they
+///   count.
+/// - **A resolved face is never looked at twice.** Tracking ids carry a
+///   decision forward, so the sweep back across the room spends its
+///   effort on whoever is still unaccounted for.
 ///
-/// The last point is what makes the difference between a demo and
-/// something you'd let decide whether a student is marked absent.
+/// What it does not do is claim to find everybody. Back rows, bowed
+/// heads and one student sitting behind another are not recognition
+/// failures to be tuned away; they are people the camera cannot see. The
+/// scan hands whatever it could not resolve to the review screen, where
+/// a human closes the gap in seconds. Marking the *wrong* student is the
+/// error worth engineering against, and every threshold here is set for
+/// that rather than for a higher headline count.
 class ClassroomRecognitionService {
   ClassroomRecognitionService._();
 
   static final ClassroomRecognitionService instance =
       ClassroomRecognitionService._();
 
-  /// Confident matches needed before a student counts as present.
+  /// Agreeing frames needed before a student counts as present.
   static const int confirmHits = 3;
 
   /// Faces narrower than this fraction of the frame are ignored. Roughly
@@ -90,16 +125,28 @@ class ClassroomRecognitionService {
   /// few pixels for the embedder to say anything trustworthy.
   static const double minFaceWidthRatio = 0.055;
 
-  /// Stricter than the login threshold. A wrong face at the gate is one
-  /// annoyed student who taps again; a wrong face here silently marks
-  /// the wrong person present and someone else absent.
-  static const double matchThreshold = 0.80;
+  /// Lower than the login bar, and deliberately so.
+  ///
+  /// A login is one face at arm's length filling the frame; a classroom
+  /// probe is a small, noisy, obliquely-lit face thirty feet away, and
+  /// the same person scores lower simply because of that. Holding the
+  /// login threshold here does not buy safety, it just refuses everybody
+  /// past the third row. The safety comes from [margin] and from
+  /// [confirmHits] agreeing frames, which a wrong match rarely sustains.
+  static const double matchThreshold = 0.70;
 
-  /// And it must beat the runner-up by this much. Thirty classmates make
-  /// near-misses far likelier than a one-to-one login ever does.
-  static const double margin = 0.06;
+  /// And it must beat the runner-up by this much. Eighty classmates make
+  /// near-misses far likelier than a one-to-one login ever does, so this
+  /// is the check doing most of the work against a wrong name.
+  static const double margin = 0.07;
+
+  /// A track is forgotten this long after it was last seen.
+  static const Duration trackMemory = Duration(seconds: 2);
 
   final Map<String, Sighting> _sightings = {};
+
+  /// ML Kit tracking id -> what we have decided about that face.
+  final Map<int, _Track> _tracks = {};
 
   List<FaceCandidate> _gallery = const [];
   Map<String, ({String name, String regNo})> _directory = const {};
@@ -143,75 +190,177 @@ class ClassroomRecognitionService {
     _gallery = candidates;
     _directory = students;
     _sightings.clear();
+    _tracks.clear();
   }
 
   /// Whether a face is big enough to bother identifying.
   bool isFaceUsable(Rect box, double frameWidth) =>
       frameWidth > 0 && (box.width / frameWidth) >= minFaceWidthRatio;
 
-  /// Identifies one face's embedding.
+  /// Drops tracks for faces that have left the frame.
   ///
-  /// Returns the sighting it belongs to, or null if nothing matched
-  /// confidently. Call once per detected face per processed frame.
-  Sighting? identify({
-    required List<double> embedding,
-    required Rect box,
-  }) {
-    if (_gallery.isEmpty) return null;
+  /// Call once per processed frame, before looking at any face.
+  void beginFrame() {
+    final now = DateTime.now();
+    _tracks.removeWhere((_, t) => now.difference(t.lastSeen) > trackMemory);
+  }
 
-    final result =
-        AdaptiveFaceService.instance.identify(embedding, _gallery);
+  /// Registers that [trackingId] is visible at [box] this frame, and
+  /// reports what is already known about it.
+  ///
+  /// Returns null when this face still needs an embedding. Returns the
+  /// sighting when the track is already resolved — the caller can draw
+  /// the label and skip the expensive part entirely, which is what makes
+  /// the sweep back across the room cheap.
+  Sighting? seen({required int? trackingId, required Rect box}) {
+    final track = _trackFor(trackingId, box);
 
-    final uid = result.uid;
-    if (uid == null) return null;
+    track.box = box;
+    track.lastSeen = DateTime.now();
 
-    // AdaptiveFaceService.accepted uses the login thresholds. A
-    // classroom needs stricter ones, so its raw scores are re-judged
-    // here rather than trusting that verdict.
-    if (result.bestScore < matchThreshold) return null;
-    if (_gallery.length > 1 && result.margin < margin) return null;
+    if (!track.locked || track.uid == null) return null;
 
-    final who = _directory[uid];
-    if (who == null) return null;
+    final sighting = _sightings[track.uid];
+    if (sighting == null) return null;
 
-    final sighting = _sightings.putIfAbsent(
-      uid,
-      () => Sighting(uid: uid, name: who.name, regNo: who.regNo),
-    );
-
-    sighting.hits++;
-    sighting.bestScore = math.max(sighting.bestScore, result.bestScore);
     sighting.lastBox = box;
     sighting.lastSeen = DateTime.now();
 
     return sighting;
   }
 
-  /// A face already confirmed near this position, if any.
-  ///
-  /// Lets the caller skip the expensive embedding step for students who
-  /// are already counted and haven't moved — the single biggest saving
-  /// available, since most of a scan is spent re-recognising the same
-  /// people sitting still.
-  Sighting? confirmedNear(Rect box) {
-    for (final s in _sightings.values) {
-      if (!s.confirmed || s.lastBox == null) continue;
-      if (DateTime.now().difference(s.lastSeen).inSeconds > 3) continue;
+  /// Whether this face is worth spending an embedding on.
+  bool needsEmbedding(int? trackingId) {
+    final track = _lookup(trackingId);
+    return track == null || !track.locked;
+  }
 
-      final overlap = s.lastBox!.intersect(box);
+  /// Identifies one face's embedding.
+  ///
+  /// Matched against the **whole** gallery, including students already
+  /// counted. Dropping them would be faster and is wrong: their face is
+  /// still in the room, and a gallery without them answers "who is this"
+  /// with the nearest remaining stranger. They are recognised as
+  /// themselves and simply not counted again.
+  Sighting? identify({
+    required List<double> embedding,
+    required Rect box,
+    int? trackingId,
+  }) {
+    if (_gallery.isEmpty) return null;
+
+    final track = _trackFor(trackingId, box);
+    track.box = box;
+    track.lastSeen = DateTime.now();
+
+    final result =
+        AdaptiveFaceService.instance.identify(embedding, _gallery);
+
+    final uid = result.uid;
+
+    // AdaptiveFaceService.accepted uses the login thresholds. A
+    // classroom needs its own, so its raw scores are re-judged here
+    // rather than trusting that verdict.
+    if (uid == null ||
+        result.bestScore < matchThreshold ||
+        (_gallery.length > 1 && result.margin < margin)) {
+      // A frame that says nothing costs one step of progress rather than
+      // all of it. Clearing the run outright was too harsh: a face at
+      // the edge of a moving frame misses occasionally, and throwing
+      // away two good frames for one bad one meant the people hardest to
+      // catch were also the slowest to confirm. A run still cannot
+      // survive on scattered guesses — it decays as fast as it builds.
+      if (track.agreeing > 0) track.agreeing--;
+      return null;
+    }
+
+    final who = _directory[uid];
+    if (who == null) return null;
+
+    // Agreement is per track. A track that changes its mind starts over.
+    if (track.uid == uid) {
+      track.agreeing++;
+    } else {
+      track.uid = uid;
+      track.agreeing = 1;
+    }
+
+    track.bestScore = math.max(track.bestScore, result.bestScore);
+
+    final sighting = _sightings.putIfAbsent(
+      uid,
+      () => Sighting(uid: uid, name: who.name, regNo: who.regNo),
+    );
+
+    // Counted once per agreeing frame of *this* track. Without the
+    // per-track accounting, one student held in view for a second
+    // confirmed themselves on consecutive near-identical frames, which
+    // is one piece of evidence counted three times.
+    sighting.hits = math.max(sighting.hits, track.agreeing);
+    sighting.bestScore = math.max(sighting.bestScore, result.bestScore);
+    sighting.lastBox = box;
+    sighting.lastSeen = DateTime.now();
+
+    // Resolved: stop embedding this face while it stays in view.
+    if (sighting.confirmed) track.locked = true;
+
+    return sighting;
+  }
+
+  _Track? _lookup(int? trackingId) =>
+      trackingId == null ? null : _tracks[trackingId];
+
+  /// The track for this face, creating one if the id is new.
+  ///
+  /// Faces with no tracking id — ML Kit drops them when a face is
+  /// momentarily lost — fall back to whichever live track overlaps the
+  /// box most, so a flicker in tracking does not throw away the evidence
+  /// already gathered about that person.
+  _Track _trackFor(int? trackingId, Rect box) {
+    if (trackingId != null) {
+      return _tracks.putIfAbsent(trackingId, () => _Track(box: box));
+    }
+
+    final overlapping = _overlapping(box);
+    if (overlapping != null) return overlapping;
+
+    // Negative keys cannot collide with ML Kit's own ids. Counted rather
+    // than derived from the map's size, which shrinks as tracks expire
+    // and would hand a new face the key of one just forgotten.
+    final key = --_anonymousTrackKey;
+    return _tracks.putIfAbsent(key, () => _Track(box: box));
+  }
+
+  int _anonymousTrackKey = 0;
+
+  _Track? _overlapping(Rect box) {
+    _Track? best;
+    var bestRatio = 0.5;
+
+    final area = box.width * box.height;
+    if (area <= 0) return null;
+
+    for (final track in _tracks.values) {
+      final overlap = track.box.intersect(box);
       if (overlap.width <= 0 || overlap.height <= 0) continue;
 
-      final overlapArea = overlap.width * overlap.height;
-      final boxArea = box.width * box.height;
-      if (boxArea > 0 && overlapArea / boxArea > 0.6) return s;
+      final ratio = (overlap.width * overlap.height) / area;
+      if (ratio > bestRatio) {
+        bestRatio = ratio;
+        best = track;
+      }
     }
-    return null;
+
+    return best;
   }
 
   /// Uids to mark present: everyone confirmed.
   List<String> get presentUids => confirmed.map((s) => s.uid).toList();
 
-  void reset() => _sightings.clear();
+  void reset() {
+    _sightings.clear();
+    _tracks.clear();
+  }
 
   /// Frees the in-memory gallery. Worth calling when the scan screen
   /// closes — a year's templates are a few hundred KB of doubles.
@@ -219,5 +368,6 @@ class ClassroomRecognitionService {
     _gallery = const [];
     _directory = const {};
     _sightings.clear();
+    _tracks.clear();
   }
 }
