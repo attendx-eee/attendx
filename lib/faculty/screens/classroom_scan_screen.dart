@@ -48,7 +48,7 @@ class ClassroomScanScreen extends StatefulWidget {
 }
 
 class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
-  final FaceDetectionService _detection = FaceDetectionService();
+  final FaceDetectionService _detection = FaceDetectionService.classroom();
   final FaceCropService _cropper = FaceCropService();
   final FaceEmbeddingService _embedder = FaceEmbeddingService();
   final ClassroomRecognitionService _recogniser =
@@ -242,18 +242,48 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
       orElse: () => cameras.first,
     );
 
-    _camera = CameraController(
-      back,
-      // Higher than the enrollment screen uses: a face at the back of a
-      // classroom is a fraction of the frame, and resolution is the one
-      // thing that decides whether its crop carries usable detail.
+    // Resolution is not a nicety here, it is the whole problem.
+    //
+    // A face is about 16cm across. Through a typical phone's rear lens
+    // at 3.5 metres — the second row — it lands on roughly 76 pixels of
+    // a 1920-wide frame, and the embedder needs about 106 to say
+    // anything trustworthy. At 1920 the camera physically cannot resolve
+    // past the front row of a classroom, whatever the model does
+    // afterwards. Doubling the width doubles every one of those figures:
+    // the second row becomes 152px, the third 118px.
+    //
+    // Falls back rather than failing. Not every phone offers 4K on the
+    // rear camera, and a scan at 1920 is worth far more than a scan that
+    // would not start.
+    for (final preset in [
+      ResolutionPreset.ultraHigh,
       ResolutionPreset.veryHigh,
-      enableAudio: false,
-      imageFormatGroup:
-          Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
-    );
+      ResolutionPreset.high,
+    ]) {
+      try {
+        _camera = CameraController(
+          back,
+          preset,
+          enableAudio: false,
+          imageFormatGroup: Platform.isAndroid
+              ? ImageFormatGroup.nv21
+              : ImageFormatGroup.bgra8888,
+        );
 
-    await _camera!.initialize();
+        await _camera!.initialize();
+        break;
+      } catch (e) {
+        debugPrint('Camera preset $preset unavailable: $e');
+        await _camera?.dispose();
+        _camera = null;
+      }
+    }
+
+    if (_camera == null) {
+      if (mounted) setState(() => _error = "Couldn't start the camera.");
+      return;
+    }
+
     if (!mounted) return;
 
     setState(() => _cameraReady = true);
@@ -527,6 +557,11 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
   void dispose() {
     _camera?.dispose();
     _recogniser.dispose();
+
+    // This screen builds its own detector rather than sharing one, so it
+    // owns closing it. A leaked ML Kit detector holds native resources
+    // for the life of the process.
+    _detection.dispose();
 
     // No scratch file to delete any more. Frames used to be written to
     // temp storage so the cropper could read them back, which meant a
