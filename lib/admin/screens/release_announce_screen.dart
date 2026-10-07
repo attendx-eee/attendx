@@ -210,7 +210,7 @@ class _ReleaseAnnounceScreenState extends State<ReleaseAnnounceScreen> {
 
                   Text(
                     'This console is running ${AppConfig.appVersion}. '
-                    'Publish the GitHub release and attach the APK to it '
+                    'Upload the APK and let the site finish deploying '
                     'first — announcing a version whose file is not live '
                     'yet sends everyone to a 404.',
                     style: AppTextStyles.caption,
@@ -223,14 +223,12 @@ class _ReleaseAnnounceScreenState extends State<ReleaseAnnounceScreen> {
                       borderRadius: BorderRadius.circular(AppRadius.sm),
                     ),
                     child: Text(
-                      'The APK lives on the repository’s Releases page, '
-                      'not in the website folder. GitHub refuses any file '
-                      'over 100MB inside a repository, and a build carrying '
-                      'every CPU architecture comes to about 144MB — so the '
-                      'release is built with --split-per-abi and the arm64 '
-                      'file attached to a release tagged for the version. '
-                      'Releases allow 2GB and are not re-uploaded on every '
-                      'deploy the way the website folder is.',
+                      'Build it with --split-per-abi and upload the arm64 '
+                      'file. A single APK carrying every CPU architecture '
+                      'comes to about 144MB, and GitHub refuses any file '
+                      'over 100MB in a repository — the arm64 build is '
+                      'around 60MB and covers every phone in the '
+                      'department.',
                       style: AppTextStyles.caption,
                     ),
                   ),
@@ -247,8 +245,8 @@ class _ReleaseAnnounceScreenState extends State<ReleaseAnnounceScreen> {
                   _field(
                       _apkUrl,
                       'APK link',
-                      'https://github.com/attendx-eee/attendx/releases/'
-                          'download/v1.2.8/attendx-v1.2.8.apk',
+                      'https://attendx-eee.github.io/attendx/'
+                          'attendx-v1.2.8.apk',
                       Icons.link_rounded),
                   SizedBox(height: Responsive.h(12)),
                   _field(_notes, "What's new", 'Shown in the notification',
