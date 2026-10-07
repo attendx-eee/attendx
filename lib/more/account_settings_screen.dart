@@ -13,10 +13,12 @@ import '../notifications/widgets/notification_health_card.dart';
 import '../screens/face_enrollment_screen.dart';
 import '../screens/face_verification_screen.dart';
 import '../screens/login.dart';
+import '../screens/profile.dart';
 import '../services/auth_service.dart';
 import '../services/biometric_auth_service.dart';
 import '../services/firestore_service.dart';
 import '../services/profile_photo_service.dart';
+import '../services/saved_account_service.dart';
 
 /// Account Settings: edit personal details and change the password.
 /// Sensitive changes are gated by identity verification — face
@@ -274,6 +276,25 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
       return _confirmPassword(reason);
     }
     return _verifyByFace();
+  }
+
+  /// Sends the student to their profile, where the photo picker lives.
+  ///
+  /// No identity check on the way in, unlike the biometric flows below.
+  /// A photograph is not a credential — it changes nothing about what
+  /// the account can do, and putting a face scan in front of a student
+  /// adding a picture is the kind of friction that means they never get
+  /// round to it.
+  Future<void> _openProfilePhoto() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProfileScreen(studentRawData: widget.student),
+      ),
+    );
+
+    // They may have added one while they were in there.
+    if (mounted) setState(() {});
   }
 
   /// Face-enrollment update flow: verify identity first, show a success
@@ -619,6 +640,8 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
       // happen before the Auth account itself is gone.
       await FirestoreService().deleteStudentAccount(uid);
       await ProfilePhotoService.instance.delete(uid);
+      // Nothing left to "Continue as".
+      await SavedAccountService.instance.forget();
 
       try {
         await FirebaseAuth.instance.currentUser?.delete();
@@ -1075,6 +1098,67 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                   ),
                 ),
               ],
+              // Asked for here rather than forced at enrolment, because
+              // every student already enrolled would otherwise have to
+              // redo a face scan to supply a photograph that has nothing
+              // to do with their face templates.
+              //
+              // The photo is not used to recognise anybody. It is what
+              // the lecturer looks at on the review screen when deciding
+              // whether somebody the camera missed was in the room, and
+              // for a class of eighty a name and a roll number are a poor
+              // way to make that call.
+              if ((widget.student['profileImageUrl'] ?? '')
+                  .toString()
+                  .isEmpty) ...[
+                const SizedBox(height: 18),
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: .06),
+                    borderRadius: BorderRadius.circular(AppRadius.lg),
+                    border: Border.all(
+                        color: AppColors.primary.withValues(alpha: .25)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Add your photo',
+                          style: TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Your lecturer sees this when checking who was in '
+                        'class. Without it you are a name on a list, and a '
+                        'class the camera could not see clearly is harder '
+                        'to sort out.',
+                        style: TextStyle(
+                            fontSize: 12, color: AppColors.textSecondary),
+                      ),
+                      const SizedBox(height: 18),
+                      SizedBox(
+                        height: 50,
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: _openProfilePhoto,
+                          icon: const Icon(Icons.add_a_photo_outlined),
+                          label: const Text('Add a photo',
+                              style: TextStyle(
+                                  fontSize: 15, fontWeight: FontWeight.w700)),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            shape: RoundedRectangleBorder(
+                              borderRadius:
+                                  BorderRadius.circular(AppRadius.sm),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
               const SizedBox(height: 18),
               Container(
                 padding: const EdgeInsets.all(20),

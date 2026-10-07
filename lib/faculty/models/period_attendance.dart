@@ -83,6 +83,15 @@ class PeriodAttendance {
   final String markedByName;
   final Timestamp? markedAt;
 
+  /// Where the register was taken and what state the phone was in.
+  ///
+  /// Advisory only, and often absent — indoors there is frequently no
+  /// usable fix, and on iOS the device flags do not exist at all.
+  /// Nothing reads this to decide anything; it is here for the one case
+  /// a year where a register is disputed and somebody has to look into
+  /// how it was taken.
+  final Map<String, dynamic> provenance;
+
   const PeriodAttendance({
     required this.id,
     required this.department,
@@ -103,6 +112,7 @@ class PeriodAttendance {
     required this.markedBy,
     required this.markedByName,
     this.markedAt,
+    this.provenance = const {},
   });
 
   static String buildId({
@@ -165,6 +175,10 @@ class PeriodAttendance {
         'markedBy': markedBy,
         'markedByName': markedByName,
         'markedAt': FieldValue.serverTimestamp(),
+        // Spread rather than nested, so a field that was never collected
+        // is simply absent instead of sitting there as a null that reads
+        // like a failed measurement.
+        ...provenance,
       };
 
   bool wasPresent(String uid) => presentUids.contains(uid);

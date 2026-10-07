@@ -14,8 +14,8 @@ class AppConfig {
   //     apkUrl: "https://`user`.github.io/`repo`/attendx-v1.2.1.apk",
   //     forceUpdate: false, notes: "What's new..." }
   // ------------------------------------------------------------------
-  static const int appVersionCode = 10;
-  static const String appVersion = '1.2.7';
+  static const int appVersionCode = 11;
+  static const String appVersion = '1.2.8';
 
   static const String appMetaCollection = 'app_meta';
   static const String appMetaDoc = 'android';
@@ -35,6 +35,12 @@ class AppConfig {
   // ------------------------------------------------------------------
   static const String cloudinaryCloudName = 'siigtukw';
   static const String cloudinaryUploadPreset = 'attendx_profile';
+
+  /// The push worker (worker/). Its cron sweeps once a minute; the app
+  /// also pings this straight after writing notifications so they go out
+  /// in a second or two. See NotificationService.nudgePush.
+  static const String pushWorkerUrl =
+      'https://attendx-push.attendx-eee.workers.dev';
 
   // ------------------------------------------------------------------
   // Firestore contract shared with the Raspberry Pi.

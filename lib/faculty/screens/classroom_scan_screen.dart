@@ -13,6 +13,7 @@ import '../../core/constants/app_config.dart';
 import '../../core/auth/account_lookup.dart';
 import '../../core/theme/app_colors.dart';
 import '../../models/face_enrollment_imports.dart';
+import '../../screens/face_verification_screen.dart';
 import '../services/classroom_recognition_service.dart';
 import 'roster_review_screen.dart';
 
@@ -88,12 +89,52 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
   /// a sweep that lasts seconds.
   static const int _embeddingsPerFrame = 5;
 
+  /// False until the person holding the phone has proved they are the
+  /// lecturer whose account is signed in.
+  bool _verified = false;
+
   @override
   void initState() {
     super.initState();
     // Normally already loaded at launch; this covers a slow or failed load.
     _embedder.initialize();
-    _prepare();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _verifyThenPrepare());
+  }
+
+  /// Checks the lecturer's own face before anything else happens.
+  ///
+  /// The register is the one thing in this app a student would want to
+  /// take for themselves, and a signed-in phone left on a desk is all it
+  /// would take. Everything else here — the sweep, the thresholds, the
+  /// review screen — assumes the person holding the camera is the person
+  /// the account belongs to, so that assumption is worth one check.
+  ///
+  /// One-to-one against the signed-in account, not an open search: the
+  /// question is "is this that lecturer", not "who is this".
+  ///
+  /// The front camera for this, the rear camera for the room. Starting
+  /// the scan camera first and then interrupting it to verify leaves two
+  /// controllers fighting over the hardware on some phones, so the
+  /// camera is not touched until this has passed.
+  Future<void> _verifyThenPrepare() async {
+    final passed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const FaceVerificationScreen(),
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (passed != true) {
+      // Straight back out. A half-opened scan screen with no camera is
+      // more confusing than simply not being here.
+      Navigator.pop(context);
+      return;
+    }
+
+    setState(() => _verified = true);
+    await _prepare();
   }
 
   Future<void> _prepare() async {
@@ -474,7 +515,7 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
       );
     }
 
-    if (_loadingGallery || !_cameraReady || _camera == null) {
+    if (!_verified || _loadingGallery || !_cameraReady || _camera == null) {
       return Scaffold(
         backgroundColor: Colors.black,
         body: Center(
@@ -484,9 +525,11 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
               const CircularProgressIndicator(color: Colors.white),
               const SizedBox(height: 18),
               Text(
-                _loadingGallery
-                    ? 'Loading the class list…'
-                    : 'Starting the camera…',
+                !_verified
+                    ? 'Confirming it is you…'
+                    : _loadingGallery
+                        ? 'Loading the class list…'
+                        : 'Starting the camera…',
                 style: const TextStyle(color: Colors.white70),
               ),
             ],
