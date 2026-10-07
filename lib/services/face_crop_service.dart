@@ -51,12 +51,16 @@ class FaceCropService {
   ///
   /// Only the eyes are used — two points fix a similarity transform
   /// exactly (rotation, uniform scale, translation), and the eyes are
-  /// far and away the most stable landmarks ML Kit reports. The mouth
-  /// points are here for reference and for the sanity check below.
+  /// far and away the most stable landmarks ML Kit reports.
+  ///
+  /// The template's right eye sits at y = 51.5014 against the left eye's
+  /// 51.6963, a fifth of a pixel lower. The transform here levels the
+  /// eyes rather than reproducing that tilt, so only the left eye's y is
+  /// needed; carrying the other value around implied a precision this
+  /// does not have.
   static const double _leftEyeX = 38.2946;
   static const double _leftEyeY = 51.6963;
   static const double _rightEyeX = 73.5318;
-  static const double _rightEyeY = 51.5014;
 
   static const int _size = 112;
 

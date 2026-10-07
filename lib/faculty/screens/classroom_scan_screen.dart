@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -393,7 +394,12 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
 
       if (jpeg == null) return null;
 
-      return img.decodeImage(jpeg);
+      // The isolate hands back a List<int>; decodeImage wants a
+      // Uint8List. The old path never hit this because it passed the
+      // bytes to File.writeAsBytes, which takes the wider type.
+      return img.decodeImage(
+        jpeg is Uint8List ? jpeg : Uint8List.fromList(jpeg),
+      );
     } catch (e) {
       debugPrint('Frame decode failed: $e');
       return null;
