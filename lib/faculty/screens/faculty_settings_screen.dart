@@ -35,6 +35,19 @@ class _FacultySettingsScreenState extends State<FacultySettingsScreen> {
   bool _biometricEnabled = false;
   bool _loading = true;
 
+  /// Whether a classroom scan ticks the students it recognised, or
+  /// leaves them for the lecturer to tick.
+  ///
+  /// Off by default, and deliberately. Recognition at classroom distance
+  /// gets people wrong in both directions — it names the wrong student
+  /// occasionally, and it misses people sitting behind others routinely.
+  /// Arriving at the review list with eighty boxes already ticked
+  /// invites the one behaviour that makes either failure permanent,
+  /// which is skimming it and pressing save. Until the department has
+  /// watched enough scans to trust the thing, a mark should be something
+  /// a person did.
+  bool _autoMark = false;
+
   UpdateStatus? _update;
   bool _checkingUpdate = false;
 
@@ -58,8 +71,37 @@ class _FacultySettingsScreenState extends State<FacultySettingsScreen> {
       _biometricSupported = supported;
       _biometricEnabled = enabled;
       _faceEnrolled = me.data()?['faceEnrolled'] == true;
+      // Absent means off. A lecturer who has never seen this setting has
+      // not agreed to it.
+      _autoMark = me.data()?['autoMarkRecognised'] == true;
       _loading = false;
     });
+  }
+
+  Future<void> _toggleAutoMark(bool value) async {
+    setState(() => _autoMark = value);
+
+    try {
+      await FirebaseFirestore.instance
+          .collection(AccountLookup.facultyAccounts)
+          .doc(widget.account.uid)
+          .set({'autoMarkRecognised': value}, SetOptions(merge: true));
+    } catch (e) {
+      if (!mounted) return;
+
+      // Put the switch back. A setting that looks saved and isn't would
+      // have the lecturer believing scans behave one way while they
+      // behave the other.
+      setState(() => _autoMark = !value);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Couldn't save that setting: $e"),
+          backgroundColor: AppColors.danger,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   Future<void> _openFaceEnrollment() async {
@@ -370,6 +412,8 @@ class _FacultySettingsScreenState extends State<FacultySettingsScreen> {
                   SizedBox(height: Responsive.h(14)),
                   _biometricCard(),
                   SizedBox(height: Responsive.h(14)),
+                  _autoMarkCard(),
+                  SizedBox(height: Responsive.h(14)),
                   _updateCard(),
                 ],
               ),
@@ -446,6 +490,70 @@ class _FacultySettingsScreenState extends State<FacultySettingsScreen> {
           Switch(
             value: _biometricEnabled,
             onChanged: _biometricSupported ? _toggleBiometric : null,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _autoMarkCard() {
+    return Container(
+      padding: Responsive.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(
+          color: _autoMark
+              ? AppColors.warning.withValues(alpha: .40)
+              : AppColors.divider,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.checklist_rtl_rounded,
+                  size: Responsive.sp(20), color: AppColors.primary),
+              SizedBox(width: Responsive.w(14)),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Tick recognised students automatically',
+                        style: AppTextStyles.title
+                            .copyWith(fontSize: Responsive.sp(14))),
+                    SizedBox(height: Responsive.h(3)),
+                    Text(
+                      _autoMark
+                          ? 'The review list opens with recognised students '
+                              'already ticked.'
+                          : 'The review list opens with nothing ticked. You '
+                              'confirm who was there.',
+                      style: AppTextStyles.caption,
+                    ),
+                  ],
+                ),
+              ),
+              Switch(value: _autoMark, onChanged: _toggleAutoMark),
+            ],
+          ),
+          SizedBox(height: Responsive.h(10)),
+          Container(
+            padding: Responsive.all(11),
+            decoration: BoxDecoration(
+              color: AppColors.warning.withValues(alpha: .08),
+              borderRadius: BorderRadius.circular(AppRadius.sm),
+            ),
+            child: Text(
+              'Leave this off while the system is being trialled. '
+              'Recognition across a classroom gets people wrong in both '
+              'directions — it occasionally names the wrong student, and '
+              'it routinely misses anyone sitting behind someone else. '
+              'Either mistake becomes permanent the moment a pre-ticked '
+              'list is saved without being read.',
+              style: AppTextStyles.caption,
+            ),
           ),
         ],
       ),

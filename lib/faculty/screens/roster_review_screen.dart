@@ -36,6 +36,15 @@ class RosterReviewScreen extends StatefulWidget {
   final String facultyName;
   final String facultyUid;
 
+  /// Whether the students the camera recognised arrive already ticked.
+  ///
+  /// Off unless the lecturer has turned it on in their settings. The
+  /// camera gets people wrong in both directions at classroom distance,
+  /// and a list that opens with eighty boxes already ticked is a list
+  /// that gets skimmed and saved. Unticked, every mark is something
+  /// somebody did on purpose.
+  final bool autoMark;
+
   const RosterReviewScreen({
     super.key,
     required this.period,
@@ -45,6 +54,7 @@ class RosterReviewScreen extends StatefulWidget {
     required this.facultyId,
     required this.facultyName,
     required this.facultyUid,
+    this.autoMark = false,
   });
 
   @override
@@ -52,7 +62,12 @@ class RosterReviewScreen extends StatefulWidget {
 }
 
 class _RosterReviewScreenState extends State<RosterReviewScreen> {
-  late final Set<String> _present = {...widget.recognisedUids};
+  late final Set<String> _present =
+      widget.autoMark ? {...widget.recognisedUids} : <String>{};
+
+  /// Who the camera named, whether or not they start ticked. Drives the
+  /// ordering and the marker on each row, so the lecturer can always see
+  /// what the camera thought even when it has marked nobody.
   late final Set<String> _recognised = {...widget.recognisedUids};
 
   bool _saving = false;
@@ -76,7 +91,13 @@ class _RosterReviewScreenState extends State<RosterReviewScreen> {
     if (mounted) setState(() => _provenance = collected);
   }
 
-  /// Unrecognised first, then by roll number within each group.
+  /// Whichever group needs attention first, then by roll number.
+  ///
+  /// Which group that is depends on the setting. With auto-ticking on,
+  /// the recognised students are already handled and the unrecognised
+  /// are the open question. With it off nothing is handled, and the
+  /// recognised ones come first because they are the ones with evidence
+  /// behind them — the lecturer confirms those, then works down the rest.
   late final List<MapEntry<String, Map<String, dynamic>>> _sorted = () {
     final entries = widget.roster.entries.toList();
 
@@ -89,7 +110,13 @@ class _RosterReviewScreenState extends State<RosterReviewScreen> {
     entries.sort((a, b) {
       final aKnown = _recognised.contains(a.key) ? 1 : 0;
       final bKnown = _recognised.contains(b.key) ? 1 : 0;
-      if (aKnown != bKnown) return aKnown.compareTo(bKnown);
+
+      if (aKnown != bKnown) {
+        return widget.autoMark
+            ? aKnown.compareTo(bKnown)
+            : bKnown.compareTo(aKnown);
+      }
+
       return regOf(a.value).compareTo(regOf(b.value));
     });
 
@@ -97,6 +124,10 @@ class _RosterReviewScreenState extends State<RosterReviewScreen> {
   }();
 
   int get _absentCount => widget.roster.length - _present.length;
+
+  /// Recognised students not yet ticked.
+  Set<String> get _unconfirmed =>
+      _recognised.difference(_present);
 
   Future<void> _save() async {
     setState(() => _saving = true);
@@ -213,6 +244,35 @@ class _RosterReviewScreenState extends State<RosterReviewScreen> {
                       ),
                     ),
                   ],
+                ),
+              ),
+
+            // One tap for the whole recognised set, when the lecturer
+            // has read it and agrees. Ticking eighty boxes by hand is
+            // not review, it is attrition — and a review step people
+            // dread is a review step they stop doing properly. This is
+            // still an act they have to choose, which is the part that
+            // matters.
+            if (_unconfirmed.isNotEmpty)
+              Padding(
+                padding: Responsive.symmetric(horizontal: 16, vertical: 4),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () =>
+                        setState(() => _present.addAll(_unconfirmed)),
+                    icon: Icon(Icons.done_all_rounded,
+                        size: Responsive.sp(18)),
+                    label: Text(
+                      'Tick the ${_unconfirmed.length} the camera '
+                      'recognised',
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.primary,
+                      side: const BorderSide(color: AppColors.primary),
+                      padding: Responsive.symmetric(vertical: 13),
+                    ),
+                  ),
                 ),
               ),
 

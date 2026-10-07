@@ -93,6 +93,14 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
   /// lecturer whose account is signed in.
   bool _verified = false;
 
+  /// Read from the lecturer's settings, defaulting to off.
+  ///
+  /// Off means the review list opens with nothing ticked and the camera
+  /// has marked nobody — it has only made suggestions. Until the
+  /// department has watched enough scans to know how often it is right,
+  /// that is the only honest default.
+  bool _autoMark = false;
+
   @override
   void initState() {
     super.initState();
@@ -140,10 +148,30 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
   Future<void> _prepare() async {
     try {
       await _embedder.initialize();
+      await _loadSettings();
       await _loadGallery();
       await _initCamera();
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
+    }
+  }
+
+  /// Whether this lecturer has turned auto-ticking on.
+  ///
+  /// A failed read leaves it off. The safe answer to "can I mark eighty
+  /// students without anyone looking" is no, and a dropped request is
+  /// not consent.
+  Future<void> _loadSettings() async {
+    try {
+      final me = await FirebaseFirestore.instance
+          .collection(AccountLookup.facultyAccounts)
+          .doc(widget.facultyUid)
+          .get();
+
+      _autoMark = me.data()?['autoMarkRecognised'] == true;
+    } catch (e) {
+      debugPrint('Auto-mark setting unavailable, staying off: $e');
+      _autoMark = false;
     }
   }
 
@@ -489,6 +517,7 @@ class _ClassroomScanScreenState extends State<ClassroomScanScreen> {
           facultyId: widget.facultyId,
           facultyName: widget.facultyName,
           facultyUid: widget.facultyUid,
+          autoMark: _autoMark,
         ),
       ),
     );
